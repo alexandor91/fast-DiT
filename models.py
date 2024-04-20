@@ -23,6 +23,9 @@ import torch.nn.functional as F
 from PIL import Image 
 import torchvision.transforms as transforms
 from sklearn.manifold import TSNE
+import umap
+from torch import nn, einsum
+from einops import rearrange, repeat
 
 # from dinov2.models import dinov2
 
@@ -107,6 +110,51 @@ class LabelEmbedder(nn.Module):
 #################################################################################
 #                                 Core DiT Model                                #
 #################################################################################
+def exists(val):
+    return val is not None
+
+class CrossAttention(nn.Module):
+    def __init__(self, query_dim, context_dim, heads, dim_head, dropout=0.2):
+        super().__init__()
+        inner_dim = dim_head * heads
+        context_dim = dim_head * heads
+
+        self.scale = dim_head ** -0.5
+        self.heads = heads
+
+        self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
+        self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
+        self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
+
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, query_dim),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x, context=None, mask=None):
+        h = self.heads
+
+        q = self.to_q(x)
+        k = self.to_k(context)
+        v = self.to_v(context)
+
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+
+        sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+
+        if exists(mask):
+            mask = rearrange(mask, 'b ... -> b (...)')
+            max_neg_value = -torch.finfo(sim.dtype).max
+            mask = repeat(mask, 'b j -> (b h) () j', h=h)
+            sim.masked_fill_(~mask, max_neg_value)
+
+        # attention, what we cannot get enough of
+        attn = sim.softmax(dim=-1)
+
+        out = einsum('b i j, b j d -> b i d', attn, v)
+        out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        return self.to_out(out)
+
 
 class DiTBlock(nn.Module):
     """
@@ -117,18 +165,28 @@ class DiTBlock(nn.Module):
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm3 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
         self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+            nn.Linear(hidden_size, 9 * hidden_size, bias=True)
         )
+        ########Dino tokens cross attention############
+        self.cross_atten = CrossAttention(query_dim = hidden_size, context_dim = hidden_size, heads = num_heads, \
+                                           dim_head = hidden_size // num_heads, dropout=0.2)
 
-    def forward(self, x, c):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+    def forward(self, x, c, dino_feat):
+        if dino_feat == None:
+            shift_msa, scale_msa, gate_msa, shift_mca, scale_mca, gate_mca, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(9, dim=1)
+            x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+            x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        else: 
+            print("#########cross attension used#######")
+            x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+            x = x + gate_mca.unsqueeze(1) * self.cross_atten(modulate(self.norm3(x), shift_mca, scale_mca), dino_feat)
+            x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
 
@@ -162,6 +220,7 @@ class DiT(nn.Module):
         patch_size=2,
         in_channels=4,
         hidden_size=1152,
+        dino_feat_size = 768, 
         depth=28,
         num_heads=16,
         mlp_ratio=4.0,
@@ -175,8 +234,11 @@ class DiT(nn.Module):
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.patch_size = patch_size
         self.num_heads = num_heads
-
+        self.counter = 0 
+        self.depth = depth
+        # self.dino_feat = nn.Parameter(torch.zeros())     
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
+        self.dino_embedder = PatchEmbed(input_size, patch_size, dino_feat_size, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         num_patches = self.x_embedder.num_patches
@@ -213,7 +275,10 @@ class DiT(nn.Module):
         w = self.x_embedder.proj.weight.data
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
-
+        # Initialize dino feature patch_embed like nn.Linear (instead of nn.Conv2d):
+        w2 = self.dino_embedder.proj.weight.data
+        nn.init.xavier_uniform_(w2.view([w2.shape[0], -1]))
+        nn.init.constant_(self.dino_embedder.proj.bias, 0)
         # Initialize label embedding table:
         nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
 
@@ -253,7 +318,7 @@ class DiT(nn.Module):
             return outputs
         return ckpt_forward
 
-    def forward(self, x, t, y):
+    def forward(self, x, t, dino_feat, y ):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -263,9 +328,15 @@ class DiT(nn.Module):
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
         y = self.y_embedder(y, self.training)    # (N, D)
-        c = t + y                                # (N, D)
+        c = t ####+ y  #####no class label emebedding                               # (N, D)
+        dino_tokens = self.dino_embedder(dino_feat)
         for block in self.blocks:
-            x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c)       # (N, T, D)
+            self.counter = self.counter + 1
+            if self.counter == 14 or self.counter == 16:     #### cross attention only applied to specific layers
+                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c, dino_tokens)       # (N, T, D)
+            else: 
+                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c, None)       # (N, T, D)
+        self.counter = 0
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
         return x
@@ -526,11 +597,13 @@ def save_tensor_as_image(tensor, filename):
 
     # Convert the flattened tensor to a NumPy array
     numpy_tensor = tensor.detach().cpu().numpy()
-    flattened_data = numpy_tensor.reshape((-1, numpy_tensor.shape[2]))
+    flattened_data = numpy_tensor.reshape((-1, numpy_tensor.shape[2])) #######flatterned
 
     # Apply t-SNE (adjust hyperparameters as needed)
-    tsne = TSNE(n_components=3, perplexity=30, random_state=42)
-    embedded_data = tsne.fit_transform(flattened_data)
+    # tsne = TSNE(n_components=3, perplexity=30, random_state=42)
+    # embedded_data = tsne.fit_transform(flattened_data)
+    reducer = umap.UMAP(n_components=3)  # Reduce to 4 components
+    embedded_data = reducer.fit_transform(flattened_data)
     # Apply t-SNE
     print('#######tsne used########')
     print(embedded_data.shape)
@@ -541,10 +614,17 @@ def save_tensor_as_image(tensor, filename):
 
     # Convert the reduced NumPy array back to a PyTorch tensor
     tensor = torch.from_numpy(embedded_data.T).view(-1, 32, 32).to(device)  # Shape: (1, 3/756, 32, 32)
+    # tensor = tensor.unsqueeze(0)
+    print('#####12333344####')
+    print(tensor.shape)
+    print(tensor)
+    # Transfer the tensor to CPU memory
+    # cpu_array = tensor.cpu().numpy()
+    # np.save('dino_frame_000440.npy', cpu_array)
 
     # # Convert the reduced tensor to a PIL Image
-    # reduced_tensor = reduced_tensor.squeeze(0).permute(1, 2, 0)  # Shape: (32, 32, 3)
-    # reduced_tensor = reduced_tensor.clamp(0, 1)  # Clamp values to [0, 1] range
+    reduced_tensor = tensor.squeeze(0).permute(1, 2, 0)  # Shape: (32, 32, 3)
+    reduced_tensor = reduced_tensor.clamp(0, 1)  # Clamp values to [0, 1] range
     
     tensor = (tensor - tensor_min) / (tensor_max - tensor_min)  # Normalize to [0, 1]
     print("######save tensor to iamage for viz##########")
@@ -563,9 +643,71 @@ def save_tensor_as_image(tensor, filename):
     # Save the image
     img.save(filename)
 
+# class CrossAttention(nn.Module):
+#     def __init__(self, dim_q, dim_k, dim_v):
+#         super().__init__()
+#         self.dim_q = dim_q
+#         self.dim_k = dim_k
+#         self.dim_v = dim_v
+
+#         self.q_proj = nn.Linear(dim_q, dim_q)
+#         self.k_proj = nn.Linear(dim_k, dim_q)
+#         self.v_proj = nn.Linear(dim_k, dim_v)
+#         self.out_proj = nn.Linear(dim_v, dim_q)
+
+#     def forward(self, x, y):
+#         batch_size, _, height, width = x.shape
+
+#         q = self.q_proj(x.view(batch_size, self.dim_q, -1)).transpose(1, 2)  # (batch_size, tokens, dim_q)
+#         k = self.k_proj(y.view(batch_size, self.dim_k, -1)).transpose(1, 2)  # (batch_size, tokens, dim_q)
+#         v = self.v_proj(y.view(batch_size, self.dim_k, -1)).transpose(1, 2)  # (batch_size, tokens, dim_v)
+
+#         attn_weights = torch.bmm(q, k.transpose(1, 2))  # (batch_size, tokens_q, tokens_k)
+#         attn_weights = attn_weights / (self.dim_q ** 0.5)
+#         attn_weights = attn_weights.softmax(dim=-1)
+
+#         attended_v = torch.bmm(attn_weights, v)  # (batch_size, tokens_q, dim_v)
+#         attended_v = attended_v.transpose(1, 2).reshape(batch_size, self.dim_v, height, width)  # (batch_size, dim_v, height, width)
+
+#         output = self.out_proj(attended_v)  # (batch_size, dim_q, height, width)
+
+#         return output
+
+# class CrossAttention2(nn.Module):
+#     def __init__(self, dim_q, dim_k, dim_v, num_heads=8):
+#         super().__init__()
+#         self.dim_q = dim_q
+#         self.dim_k = dim_k
+#         self.dim_v = dim_v
+#         self.num_heads = num_heads
+#         self.head_dim = dim_q // num_heads
+
+#         self.q_proj = nn.Linear(dim_q, dim_q)
+#         self.k_proj = nn.Linear(dim_k, dim_q)
+#         self.v_proj = nn.Linear(dim_k, dim_v)
+#         self.out_proj = nn.Linear(dim_v, dim_q)
+
+#     def forward(self, x, y):
+#         batch_size, _, height, width = x.shape
+
+#         q = self.q_proj(x.view(batch_size, self.dim_q, -1)).view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)  # (batch_size, num_heads, tokens_q, head_dim)
+#         k = self.k_proj(y.view(batch_size, self.dim_k, -1)).view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)  # (batch_size, num_heads, tokens_k, head_dim)
+#         v = self.v_proj(y.view(batch_size, self.dim_k, -1)).view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)  # (batch_size, num_heads, tokens_k, head_dim)
+
+#         q_cat_k = torch.cat([q, k], dim=2)  # (batch_size, num_heads, tokens_q + tokens_k, head_dim)
+#         attn_weights = torch.matmul(q_cat_k, q_cat_k.transpose(2, 3)) / (self.head_dim ** 0.5)  # (batch_size, num_heads, tokens_q + tokens_k, tokens_q + tokens_k)
+#         attn_weights = attn_weights.softmax(dim=-1)
+
+#         attended_v = torch.matmul(attn_weights[:, :, :q.size(2), q.size(2):], v)  # (batch_size, num_heads, tokens_q, head_dim)
+#         attended_v = attended_v.transpose(1, 2).reshape(batch_size, -1, self.dim_v)  # (batch_size, tokens_q, dim_v)
+
+#         output = self.out_proj(attended_v).view(batch_size, self.dim_q, height, width)  # (batch_size, dim_q, height, width)
+
+#         return output
+  
 if __name__ == "__main__":
     # Download all DiT checkpoints
-    print("######main starts#########")
+    print("###### main starts#########")
     # semantic_model = vit_large(
     #     patch_size=14,
     #     img_size=526,
@@ -582,13 +724,15 @@ if __name__ == "__main__":
 
     feats = torch.from_numpy(np.load(os.path.join(base_dir, folder_type, vae_features))).to(device)
     print(feats.shape)
-    print(feats)
+    # print(feats)
     # min_val = feats.min().item()
     # max_val = feats.max().item()
     # print(min_val)
     # print(max_val)
     print('#############')
     # Read a PIL image 
+
+    ###############pre processing for dino features ############################
     image = Image.open(os.path.join(base_dir, img_folder_type, filename)) 
     
     # Define a transform to convert PIL  image to a Torch tensor 
@@ -610,12 +754,20 @@ if __name__ == "__main__":
     print(img_tensor.shape) 
     Dino = DINO().to(device)
     dino_feats = Dino(img_tensor)
-    print(dino_feats)
+    # print(dino_feats)
+    ###############pre processing for dino features ############################
 
+    model = DiT_models['DiT-XL/2'](
+        input_size=256 // 8,
+        num_classes=1000
+    )
+    t = torch.randint(0, 1000, (1,), device=device)
+
+    model = model.to(device)
+    model(feats, t, dino_feats, torch.zeros(1, dtype=int).to(device))
     # Example usage
-    save_tensor_as_image(dino_feats, 'output_dino_image.png')
-
-    save_tensor_as_image(feats, 'output_image.png')
+    # save_tensor_as_image(dino_feats, 'output_dino_image.png')
+    # save_tensor_as_image(feats, 'output_image.png')
     # min_val = dino_feats.min().item()
     # max_val = dino_feats.max().item()
     # print(min_val)
