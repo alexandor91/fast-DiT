@@ -153,6 +153,8 @@ class CrossAttention(nn.Module):
 
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        print("#####out after cross attention########")
+        print(out.shape)
         return self.to_out(out)
 
 
@@ -179,11 +181,11 @@ class DiTBlock(nn.Module):
 
     def forward(self, x, c, dino_feat):
         if dino_feat == None:
-            shift_msa, scale_msa, gate_msa, shift_mca, scale_mca, gate_mca, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(9, dim=1)
+            shift_msa, scale_msa, gate_msa, shift_mca, scale_mca, gate_mca, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(9, dim=1) 
             x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
             x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        else: 
-            print("#########cross attension used#######")
+        else:
+            shift_msa, scale_msa, gate_msa, shift_mca, scale_mca, gate_mca, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(9, dim=1) 
             x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
             x = x + gate_mca.unsqueeze(1) * self.cross_atten(modulate(self.norm3(x), shift_mca, scale_mca), dino_feat)
             x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
