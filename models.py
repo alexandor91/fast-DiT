@@ -323,7 +323,7 @@ class DiT(nn.Module):
     def forward(self, x, t, dino_feat, y ):
         """
         Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
+        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images) ####(1, 4 32, 32) for example
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
