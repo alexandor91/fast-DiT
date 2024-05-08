@@ -106,6 +106,88 @@ class LabelEmbedder(nn.Module):
         embeddings = self.embedding_table(labels)
         return embeddings
 
+#################################################################################
+#                            epipolar line mask                                 #
+#################################################################################
+def quaternion_to_rotation_matrix(quaternion):
+  """
+  Convert a quaternion to a 3x3 rotation matrix.
+
+  Args:
+      quaternion (torch.Tensor): 1D tensor representing the quaternion in the order [qw, qx, qy, qz].
+
+  Returns:
+      rotation_matrix (torch.Tensor): 3x3 rotation matrix.
+  """
+  qw, qx, qy, qz = quaternion.unbind(dim=1)
+
+  # Compute the elements of the rotation matrix
+  r11 = 1 - 2 * (qy**2 + qz**2)
+  r12 = 2 * (qx * qy - qw * qz)
+  r13 = 2 * (qx * qz + qw * qy)
+  r21 = 2 * (qx * qy + qw * qz)
+  r22 = 1 - 2 * (qx**2 + qz**2)
+  r23 = 2 * (qy * qz - qw * qx)
+  r31 = 2 * (qx * qz - qw * qy)
+  r32 = 2 * (qy * qz + qw * qx)
+  r33 = 1 - 2 * (qx**2 + qy**2)
+
+  # Create the rotation matrix
+  rotation_matrix = torch.stack([
+      [r11, r12, r13],
+      [r21, r22, r23],
+      [r31, r32, r33]], dim=1)
+
+  return rotation_matrix
+
+
+def compute_skew_symmetric(v):
+  """
+  Compute the skew-symmetric matrix from a 3D vector.
+
+  Args:
+      v (torch.Tensor): 3x1 vector.
+
+  Returns:
+      M (torch.Tensor): 3x3 skew-symmetric matrix.
+  """
+  M = torch.tensor([
+      [0, -v[2], v[1]],
+      [v[2], 0, -v[0]],
+      [-v[1], v[0], 0]], dtype=torch.float)
+  return M
+
+
+def compute_fundamental_matrix(K1, K2, R, t):
+  """
+  Compute the fundamental matrix from intrinsic matrix and relative pose.
+
+  Args:
+      K1 (torch.Tensor): 3x3 intrinsic matrix. Source view
+      K2 (torch.Tensor): 3x3 intrinsic matrix. Target view
+      R (torch.Tensor): 3x3 relative rotation matrix from target to source view.
+      t (torch.Tensor): 3x1 relative translation vector from target to source view.
+
+  Returns:
+      F (torch.Tensor): 3x3 fundamental matrix.
+  """
+  # Move tensors to CUDA if available
+  device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+  K1, K2, R, t = K1.to(device), K2.to(device), R.to(device), t.to(device)
+
+  # Compute the essential matrix (using torch.bmm for batch matrix multiplication)
+  E = torch.bmm(K2.transpose(1, 2), torch.bmm(compute_skew_symmetric(t), torch.bmm(R, K1)))
+
+  # Enforce the rank-2 constraint on the essential matrix
+  U, S, Vt = torch.linalg.svd(E)
+  S[2] = 0
+  E = torch.bmm(U, torch.diag(S)) @ Vt
+
+  # Compute the fundamental matrix from the essential matrix (using torch.inverse)
+  F = torch.bmm(torch.inverse(K2.transpose(1, 2)), torch.bmm(E, torch.inverse(K1)))
+
+  return F.to(device)  # Move the result back to CPU for further processing
+
 
 #################################################################################
 #                                 Core DiT Model                                #
@@ -116,16 +198,24 @@ def exists(val):
 class CrossAttention(nn.Module):
     def __init__(self, query_dim, context_dim, heads, dim_head, dropout=0.2):
         super().__init__()
+        assert query_dim % heads == 0, 'dim should be divisible by num_heads'
+        assert context_dim % heads == 0, 'dim should be divisible by num_heads'
+        assert context_dim == query_dim, 'dim should be consistent for query and key token dimension'
         inner_dim = dim_head * heads
         context_dim = dim_head * heads
 
         self.scale = dim_head ** -0.5
         self.heads = heads
+        self.norm_q = nn.LayerNorm(query_dim, eps=1e-6)  # Use LayerNorm for query normalization
+        self.norm_k = nn.LayerNorm(context_dim, eps=1e-6)  # Use LayerNorm for query normalization
+        self.linear = nn.Linear(context_dim, context_dim * 2, bias=False)  # Double the dimension
+        # self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
+        # self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
+        self.attn_drop = nn.Dropout(dropout)
 
-        self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
-        self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
-        self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
-
+        print("##### Cross Attention Info ################")
+        print(f"Context Dim: {context_dim}")
+        print(f"Inner Dim: {inner_dim}")
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, query_dim),
             nn.Dropout(dropout)
@@ -134,27 +224,37 @@ class CrossAttention(nn.Module):
     def forward(self, x, context=None, mask=None):
         h = self.heads
 
-        q = self.to_q(x)
-        k = self.to_k(context)
-        v = self.to_v(context)
+        print("##### Attention tokens start################")
+        print(f"q Dim: {x.shape}")
+        print(f"k Dim: {context.shape}")
+        # Normalize query tokens using LayerNorm
+        q = self.norm_q(x)
+        # Project key and value tokens
+        projected = self.linear(context)
+        # k = context
+        # v = context
+        k, v = torch.split(projected, projected.size(2) // 2, dim=2)
+        k = self.norm_k(k)
 
+        # Rearrange tensors for multi-head attention
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
-        sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
-
-        if exists(mask):
+        # Calculate attention scores, apply scaling, and normalize with softmax
+        sim = torch.einsum('b i d, b j d -> b i j', q, k) * self.scale
+        if mask is not None:
             mask = rearrange(mask, 'b ... -> b (...)')
             max_neg_value = -torch.finfo(sim.dtype).max
             mask = repeat(mask, 'b j -> (b h) () j', h=h)
             sim.masked_fill_(~mask, max_neg_value)
-
-        # attention, what we cannot get enough of
         attn = sim.softmax(dim=-1)
 
-        out = einsum('b i j, b j d -> b i d', attn, v)
+        # Apply dropout on attention weights
+        attn = self.attn_drop(attn)
+
+        # Contextualize using attention weights and value vectors
+        out = torch.einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
-        print("#####out after cross attention########")
-        print(out.shape)
+
         return self.to_out(out)
 
 
