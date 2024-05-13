@@ -214,7 +214,7 @@ class CrossAttention(nn.Module):
         self.attn_drop = nn.Dropout(dropout)
 
         print("##### Cross Attention Info ################")
-        print(f"Context Dim: {context_dim}")
+        # print(f"Context Dim: {context_dim}")
         print(f"Inner Dim: {inner_dim}")
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, query_dim),
@@ -242,6 +242,7 @@ class CrossAttention(nn.Module):
         # Calculate attention scores, apply scaling, and normalize with softmax
         sim = torch.einsum('b i d, b j d -> b i j', q, k) * self.scale
         if mask is not None:
+            print("########mask is used!!!!!")
             mask = rearrange(mask, 'b ... -> b (...)')
             max_neg_value = -torch.finfo(sim.dtype).max
             mask = repeat(mask, 'b j -> (b h) () j', h=h)
