@@ -188,6 +188,57 @@ def compute_fundamental_matrix(K1, K2, R, t):
 
   return F.to(device)  # Move the result back to CPU for further processing
 
+###################epipolar attention###################################
+class EpipolarAttention(nn.Module):
+    def __init__(self, feature_dim, img_height, img_width):
+        super(EpipolarAttention, self).__init__()
+        self.feature_dim = feature_dim
+        self.img_height = img_height
+        self.img_width = img_width
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, f_ti, f_src, K, R, t):
+        # Compute the cross-view attention
+        f_src_flat = f_src.view(-1, self.feature_dim, self.img_height * self.img_width)  # Flatten the spatial dimensions
+        f_ti_flat = f_ti.view(-1, self.feature_dim, self.img_height * self.img_width)    # Flatten the spatial dimensions
+        
+        A_ij = torch.matmul(f_ti_flat.permute(0, 2, 1), f_src_flat)  # Compute affinity matrix
+        A_ij = A_ij.view(-1, self.img_height, self.img_width, self.img_height, self.img_width)  # Reshape affinity matrix
+        
+        # Compute the epipolar line for each target view feature map
+        E_src = K @ (R @ torch.cat((torch.eye(3, device=K.device), -t.view(-1, 3, 1)), dim=2))  # Compute the epipolar line parameters
+        
+        weight_map = self.compute_weight_map(E_src)
+        
+        # Apply epipolar attention
+        A_ij_weighted = A_ij * weight_map.unsqueeze(1).unsqueeze(1)  # Weight the affinity matrix
+        A_ij_weighted_flat = A_ij_weighted.view(-1, self.img_height * self.img_width, self.img_height * self.img_width)
+        
+        attention_map = F.softmax(A_ij_weighted_flat, dim=2)
+        
+        # Compute the output of the epipolar attention layer
+        f_src_attended = torch.matmul(attention_map, f_src_flat.permute(0, 2, 1))  # Apply the attention map
+        f_src_attended = f_src_attended.view(-1, self.feature_dim, self.img_height, self.img_width)
+        
+        return f_src_attended
+
+    def compute_weight_map(self, E_src):
+        # Compute the epipolar line for each pixel in the target view
+        x = torch.arange(self.img_width, device=E_src.device).float()
+        y = torch.arange(self.img_height, device=E_src.device).float()
+        X, Y = torch.meshgrid(x, y)
+        P_t = torch.stack([X.flatten(), Y.flatten(), torch.ones_like(X.flatten())], dim=0)
+        
+        # Compute the epipolar line distance for each pixel
+        d = torch.matmul(E_src[:, :3], P_t)
+        d_norm = torch.norm(d[:, :2], dim=1)  # Normalize using the first two components (u, v)
+        distances = torch.abs(d[2, :] / d_norm)  # Compute the distance to the epipolar line
+        
+        # Equation 12: m_{p_i, K, R, t}(v_j) = 1 - sigmoid(50 * (d - 0.05))
+        weight_map = 1 - self.sigmoid(50 * (distances - 0.05))
+        
+        return weight_map.view(self.img_height, self.img_width)
+
 ##################################################################################
 #                        ray map implementation from google                      #
 ##################################################################################
@@ -222,6 +273,8 @@ def concatenate_raymap(latents, raymap):
     raymap = raymap.permute(2, 0, 1).unsqueeze(0).expand(B, -1, -1, -1)  # Shape: (B, 6, H, W)
     latents_with_raymap = torch.cat([latents, raymap], dim=1)  # Concatenate along channels
     return latents_with_raymap
+
+
 
 #################################################################################
 #                                 Core DiT Model                                #
