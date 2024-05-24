@@ -188,6 +188,40 @@ def compute_fundamental_matrix(K1, K2, R, t):
 
   return F.to(device)  # Move the result back to CPU for further processing
 
+##################################################################################
+#                        ray map implementation from google                      #
+##################################################################################
+def compute_ray_directions(H, W, focal_length_x , focal_length_y):
+    """
+    Compute ray directions for all pixels in the image.
+    """
+    i, j = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='ij')
+    directions = torch.stack([(i - W * 0.5) / focal_length_x, -(j - H * 0.5) / focal_length_y, -torch.ones_like(i)], dim=-1)
+    return directions
+
+def compute_raymap(H, W, focal_length_x, focal_length_y, camera_pose):
+    """
+    Compute the raymap for an image given its dimensions, focal length, and camera pose.
+    """
+    directions = compute_ray_directions(H, W, focal_length_x, focal_length_y)  # shape: (W, H, 3)
+    directions = directions.reshape(-1, 3)
+    directions = directions @ camera_pose[:3, :3].T  # Rotate ray directions by camera rotation (transpose for correct multiplication)
+
+    origins = camera_pose[:3, 3].expand_as(directions)  # Use camera translation as origin
+
+    raymap = torch.cat([origins, directions], dim=-1)  # Concatenate origins and directions
+    raymap = raymap.reshape(H, W, 6)  # Reshape to (H, W, 6)
+    
+    return raymap
+
+def concatenate_raymap(latents, raymap):
+    """
+    Concatenate raymap with latent representations channel-wise.
+    """
+    B, C, H, W = latents.size()
+    raymap = raymap.permute(2, 0, 1).unsqueeze(0).expand(B, -1, -1, -1)  # Shape: (B, 6, H, W)
+    latents_with_raymap = torch.cat([latents, raymap], dim=1)  # Concatenate along channels
+    return latents_with_raymap
 
 #################################################################################
 #                                 Core DiT Model                                #
