@@ -197,80 +197,100 @@ class EpipolarAttention(nn.Module):
         self.img_width = img_width
         self.sigmoid = nn.Softmax(dim=-1)     # nn.Sigmoid()
     
-    def forward(self, f_ti, f_src, K, R, t):
+    def forward(self, f_tar, f_src, K, R, t): ############# f_tar,  f_src is b x 3 x 1 as img pixel location, 
+        ########## K in b x 3 x3, R in b x 3 x3, t b x 3 x1 
         # Compute the cross-view attention
         f_src_flat = f_src.view(-1, self.feature_dim, self.img_height * self.img_width)  # Flatten the spatial dimensions
-        f_ti_flat = f_ti.view(-1, self.feature_dim, self.img_height * self.img_width)    # Flatten the spatial dimensions
+        f_tar_flat = f_tar.view(-1, self.feature_dim, self.img_height * self.img_width)    # Flatten the spatial dimensions
         
-        A_ij = torch.matmul(f_ti_flat.permute(0, 2, 1), f_src_flat.permute(0, 2, 1))  # Compute affinity matrix (batch_size  feat_dim token_num)
-        A_ij = A_ij.view(-1, self.img_height, self.img_width, self.img_height, self.img_width)  # Reshape affinity matrix
+        # A_ij = torch.matmul(f_tar_flat.permute(0, 2, 1), f_src_flat.permute(0, 2, 1))  # Compute affinity matrix (batch_size  feat_dim token_num)
+        A = torch.einsum('bik,bkj->bij',  f_src_flat.permute(0, 2, 1), f_tar_flat)
+        A = A.view(-1, self.img_height * self.img_width, self.img_height * self.img_width)  # Reshape affinity matrix
         
         # Compute the projeciting point and epipole points
-        E_src = K @ (R @ (torch.matmul(torch.inverse(K), f_ti)) + t.view(-1, 3, 1))   #.squeeze(-1) # Compute the epipolar line parameters
+        tar_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), f_tar_flat))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1) # Compute the epipolar line parameters
 
-        origin = torch.tensor([0.0, 0.0, 0.0]).unsqueeze(0)
-        o_i_j = K @ (R @ (torch.matmul(torch.inverse(K), f_ti)) + t.view(-1, 3, 1))    #.squeeze(-1)
+        origin = torch.tensor([0.0, 0.0, 0.0]).view(3, 1).unsqueeze(0).repeat(1, 1, self.img_height*self.img_width)  # Reshape affinity matrix
+        o_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), origin))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))    #.squeeze(-1)
         #  p_i_t_j = torch.matmul(R_t_i, torch.inverse(K) @ p_target.unsqueeze(-1)) + t_t_i.unsqueeze(-1)  # Equation (8)
-
         
         # Compute the epipolar lines based on the projected points and origin
         c = torch.linspace(-1, 1, steps=self.img_width)
-        epipolar_lines = o_i_j.unsqueeze(-1) + c * (E_src - o_i_j.unsqueeze(-1))   
+        epipolar_lines = o_proj + c * (tar_proj - o_proj)   ########## b x 3 x (h x w)
+        ########## it can be replaced by own epipolar implementation
 
-        d_epipolar = self.compute_epipolar_distance(1, E_src, epipolar_lines, o_i_j)
-        weight_map = self.compute_weight_map(E_src, d_epipolar)
+        d_epipolar = self.compute_epipolar_distance(f_src_flat, tar_proj, o_proj) #### b x N x N
+        epipolar_line_thre = 0.5
+
+        weight_map = 1 - self.sigmoid(50 * (d_epipolar - epipolar_line_thre))
+        # self.compute_weight_map(f_src_flat, d_epipolar, epipolar_line_thre)
         
         # Apply epipolar attention
-        A_ij_weighted = A_ij * weight_map.unsqueeze(1).unsqueeze(1)  # Weight the affinity matrix
-        A_ij_weighted_flat = A_ij_weighted.view(-1, self.img_height * self.img_width, self.img_height * self.img_width)
+        A_weighted_flat = A * weight_map  # Weight the affinity matrix
+        # A_weighted_flat = A_weighted.view(-1, self.img_height * self.img_width, self.img_height * self.img_width)
 
 
-        attention_map = F.softmax(A_ij_weighted_flat, dim=2)
+        attention_map = F.softmax(A_weighted_flat, dim=1) ####attention over the row
         
         # Compute the output of the epipolar attention layer
-        f_src_attended = torch.matmul(attention_map, f_src_flat.permute(0, 2, 1))  # Apply the attention map
+        f_src_attended = torch.einsum('bik,bkj->bij',  attention_map, f_src_flat.permute(0, 2, 1))
+        # f_src_attended = torch.matmul(f_src_flat, attention_map)  # Apply the attention map
         f_src_attended = f_src_attended.view(-1, self.feature_dim, self.img_height, self.img_width)
         
         return f_src_attended
 
-    def compute_epipolar_distance(self, p_j, p_i_j, epipolar_lines, o_i_j):
+    def compute_epipolar_distance(self, f_src_flat, tar_proj, o_proj):
         # Compute the distance d(p_epipolar, p^j) according to the provided formula
-        diff = p_j - o_i_j
-        cross_prod = torch.cross(diff, (p_i_j - o_i_j), dim=-1)
-        d_epipolar = torch.norm(cross_prod, dim=-1) / torch.norm(p_i_j - o_i_j, dim=-1)
+        # f_src_flat, tar_proj, and o_proj are all of shape (b x 3 x N)
 
-        return d_epipolar
+        # Compute the difference between target projections and origin projections
+        diff = tar_proj - o_proj  # Shape: b x 3 x N
+
+        # Expand f_src_flat and o_proj to enable broadcasting for pairwise column-wise cross products
+        f_src_flat_expanded = f_src_flat.unsqueeze(3)  # Shape: b x 3 x N x 1
+        o_proj_expanded = o_proj.unsqueeze(3)  # Shape: b x 3 x N x 1
+
+        # Compute the cross product between each column of f_src_flat and each column of o_proj
+        cross_prod = torch.cross(f_src_flat_expanded - o_proj_expanded, diff.unsqueeze(2), dim=1)  # Shape: b x 3 x N x N
+
+        # Compute the norm of the cross product and the norm of the difference
+        cross_prod_norm = torch.norm(cross_prod, dim=1)  # Shape: b x N x N
+        diff_norm = torch.norm(diff, dim=1, keepdim=True)  # Shape: b x 1 x N
+
+        # Compute the distance d_epipolar
+        d_epipolar = cross_prod_norm / diff_norm  # Shape: b x N x N
+        return d_epipolar #### b x 1 x (h x w)
     
-    def epipolar_line_computation(p_target, K, R, t):
-        """
-        Compute the epipolar line on the source view image plane.
+    # def epipolar_line_computation(p_target, K, R, t):
+    #     """
+    #     Compute the epipolar line on the source view image plane.
 
-        Args:
-            p_target (torch.Tensor): Point on the target view image plane (2D or 3D).
-            K (torch.Tensor): Camera intrinsic matrix.
-            R (torch.Tensor): Relative rotation matrix from target to source view.
-            t (torch.Tensor): Relative translation vector from target to source view.
+    #     Args:
+    #         p_target (torch.Tensor): Point on the target view image plane (2D or 3D).
+    #         K (torch.Tensor): Camera intrinsic matrix.
+    #         R (torch.Tensor): Relative rotation matrix from target to source view.
+    #         t (torch.Tensor): Relative translation vector from target to source view.
 
-        Returns:
-            torch.Tensor: Epipolar line parameters on the source view image plane.
-        """
-        p_i_j = K @ torch.matmul(R, torch.inverse(K) @ p_target.unsqueeze(-1)) + t.unsqueeze(-1)  # Equation (8)
-        p_i_j = p_i_j.squeeze(-1)
+    #     Returns:
+    #         torch.Tensor: Epipolar line parameters on the source view image plane.
+    #     """
+    #     p_i_j = K @ torch.matmul(R, torch.inverse(K) @ p_target.unsqueeze(-1)) + t.unsqueeze(-1)  # Equation (8)
+    #     p_i_j = p_i_j.squeeze(-1)
 
-        o_target = torch.tensor([0., 0., 0.])  # Camera origin at target view
-        o_i_j = K @ torch.matmul(R, torch.inverse(K) @ o_target.unsqueeze(-1)) + t.unsqueeze(-1)  # Equation (9)
-        o_i_j = o_i_j.squeeze(-1)
+    #     o_target = torch.tensor([0., 0., 0.])  # Camera origin at target view
+    #     o_i_j = K @ torch.matmul(R, torch.inverse(K) @ o_target.unsqueeze(-1)) + t.unsqueeze(-1)  # Equation (9)
+    #     o_i_j = o_i_j.squeeze(-1)
 
-        epipolar_line_params = torch.stack([o_i_j, p_i_j - o_i_j], dim=-1)  # Line parameters: origin, direction
+    #     epipolar_line_params = torch.stack([o_i_j, p_i_j - o_i_j], dim=-1)  # Line parameters: origin, direction
 
-        return epipolar_line_params
+    #     return epipolar_line_params
 
-    def compute_weight_map(self, E_src, d_epipolar):
+    # def compute_weight_map(self, f_src_flat, d_epipolar, epipolar_line_thre):
         # Compute the epipolar line for each pixel in the target view
-        x = torch.arange(self.img_width, device=E_src.device).float()
-        y = torch.arange(self.img_height, device=E_src.device).float()
-        X, Y = torch.meshgrid(x, y)
-        P_t = torch.stack([X.flatten(), Y.flatten(), torch.ones_like(X.flatten())], dim=0)
+        # x = torch.arange(self.img_width).float()
+        # y = torch.arange(self.img_height).float()
+        # X, Y = torch.meshgrid(x, y)
+        # P_t = torch.stack([X.flatten(), Y.flatten(), torch.ones_like(X.flatten())], dim=0)
         
         # # Compute the epipolar line distance for each pixel
         # d = torch.matmul(E_src[:, :3], P_t)
@@ -278,9 +298,9 @@ class EpipolarAttention(nn.Module):
         # distances = torch.abs(d[2, :] / d_norm)  # Compute the distance to the epipolar line
         
         # Equation 12: m_{p_i, K, R, t}(v_j) = 1 - sigmoid(50 * (d - 0.05))
-        weight_map = 1 - self.sigmoid(50 * (d_epipolar - 0.05))
+        # weight_map = 1 - self.sigmoid(50 * (d_epipolar - epipolar_line_thre))
         
-        return weight_map.view(self.img_height, self.img_width)
+        # return weight_map.view(self.img_height, self.img_width)
 
 ##################################################################################
 #                        ray map implementation from google                      #
