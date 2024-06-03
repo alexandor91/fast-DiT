@@ -1018,6 +1018,8 @@ if __name__ == "__main__":
 
     model = model.to(device)
     model(feats, t, dino_feats, torch.zeros(1, dtype=int).to(device))
+
+    #EpipolarAttention
     # Example usage
     # save_tensor_as_image(dino_feats, 'output_dino_image.png')
     # save_tensor_as_image(feats, 'output_image.png')
