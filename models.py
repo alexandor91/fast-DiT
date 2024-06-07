@@ -200,9 +200,12 @@ class EpipolarAttention(nn.Module):
     def forward(self, f_tar, f_src, K, R, t): ############# f_tar,  f_src is b x 3 x 1 as img pixel location, 
         ########## K in b x 3 x3, R in b x 3 x3, t b x 3 x1 
         # Compute the cross-view attention
+        print("################input tensor shape##############")
+        print(f_src.shape)
+        print(f_tar.shape)
+
         self.f_src_flat = f_src.view(-1, self.feature_dim, self.img_height * self.img_width)  # Flatten the spatial dimensions
         self.f_tar_flat = f_tar.view(-1, self.feature_dim, self.img_height * self.img_width)    # Flatten the spatial dimensions
-        
         # A_ij = torch.matmul(f_tar_flat.permute(0, 2, 1), f_src_flat.permute(0, 2, 1))  # Compute affinity matrix (batch_size  feat_dim token_num)
         A = torch.einsum('bik,bkj->bij',  self.f_src_flat.permute(0, 2, 1), self.f_tar_flat)
         A = A.view(-1, self.img_height * self.img_width, self.img_height * self.img_width)  # Reshape affinity matrix
@@ -1007,8 +1010,7 @@ if __name__ == "__main__":
     ])
 
     # Define the batch size
-    b = 32
-
+    b = 8
     feature_dim = 4 
     img_height = 32 
     img_width = 32
@@ -1016,13 +1018,17 @@ if __name__ == "__main__":
     K = torch.randn(b, 3, 3, device='cuda')
     R = torch.randn(b, 3, 3, device='cuda')
     t = torch.randn(b, 3, 1, device='cuda')
-    src_feats = torch.randn(b, 32, 32, 4, device='cuda')
-    target_feats = torch.randn(b, 32, 32, 4, device='cuda')
+    f_src_flat = torch.randn(b, 32, 32, 4, device='cuda')
+    tar_proj = torch.randn(b, 32, 32, 4, device='cuda')
     N = img_width*img_height  # Example value for N, you can change it as needed
 
-    # Initialize random tensors
-    f_src_flat = torch.randn(b, 3, N, device='cuda')
-    tar_proj = torch.randn(b, 3, N, device='cuda')
+    # # Initialize random tensors
+    # f_src_flat = torch.randn(b, 3, N, device='cuda')
+    # tar_proj = torch.randn(b, 3, N, device='cuda')
+
+    print("########  main #########")
+    print(f_src_flat.shape)
+    print(tar_proj.shape)
     # o_proj = torch.randn(b, 3, N, device='cuda')
 
 
