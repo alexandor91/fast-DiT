@@ -200,15 +200,20 @@ class EpipolarAttention(nn.Module):
     def forward(self, f_tar, f_src, K, R, t): ############# f_tar,  f_src is b x 3 x 1 as img pixel location, 
         ########## K in b x 3 x3, R in b x 3 x3, t b x 3 x1 
         # Compute the cross-view attention
-        f_src_flat = f_src.view(-1, self.feature_dim, self.img_height * self.img_width)  # Flatten the spatial dimensions
-        f_tar_flat = f_tar.view(-1, self.feature_dim, self.img_height * self.img_width)    # Flatten the spatial dimensions
+        self.f_src_flat = f_src.view(-1, self.feature_dim, self.img_height * self.img_width)  # Flatten the spatial dimensions
+        self.f_tar_flat = f_tar.view(-1, self.feature_dim, self.img_height * self.img_width)    # Flatten the spatial dimensions
         
         # A_ij = torch.matmul(f_tar_flat.permute(0, 2, 1), f_src_flat.permute(0, 2, 1))  # Compute affinity matrix (batch_size  feat_dim token_num)
-        A = torch.einsum('bik,bkj->bij',  f_src_flat.permute(0, 2, 1), f_tar_flat)
+        A = torch.einsum('bik,bkj->bij',  self.f_src_flat.permute(0, 2, 1), self.f_tar_flat)
         A = A.view(-1, self.img_height * self.img_width, self.img_height * self.img_width)  # Reshape affinity matrix
         
         # Compute the projeciting point and epipole points
-        tar_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), f_tar_flat))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1) # Compute the epipolar line parameters
+        print("################tar proj tensor shape##############")
+        print(K.shape)
+        print(R.shape)
+        print(self.f_tar_flat.shape)
+        print(t.shape)
+        tar_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), self.f_tar_flat))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1) # Compute the epipolar line parameters
 
         origin = torch.tensor([0.0, 0.0, 0.0]).view(3, 1).unsqueeze(0).repeat(1, 1, self.img_height*self.img_width)  # Reshape affinity matrix
         o_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), origin))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))    #.squeeze(-1)
@@ -219,7 +224,7 @@ class EpipolarAttention(nn.Module):
         epipolar_lines = o_proj + c * (tar_proj - o_proj)   ########## b x 3 x (h x w)
         ########## it can be replaced by own epipolar implementation
 
-        d_epipolar = self.compute_epipolar_distance(f_src_flat, tar_proj, o_proj) #### b x N x N
+        d_epipolar = self.compute_epipolar_distance(self.f_src_flat, tar_proj, o_proj) #### b x N x N
         epipolar_line_thre = 0.5
 
         weight_map = 1 - self.sigmoid(50 * (d_epipolar - epipolar_line_thre))
@@ -233,7 +238,7 @@ class EpipolarAttention(nn.Module):
         attention_map = F.softmax(A_weighted_flat, dim=1) ####attention over the row
         
         # Compute the output of the epipolar attention layer
-        f_src_attended = torch.einsum('bik,bkj->bij',  attention_map, f_src_flat.permute(0, 2, 1))
+        f_src_attended = torch.einsum('bik,bkj->bij',  attention_map, self.f_src_flat.permute(0, 2, 1))
         # f_src_attended = torch.matmul(f_src_flat, attention_map)  # Apply the attention map
         f_src_attended = f_src_attended.view(-1, self.feature_dim, self.img_height, self.img_width)
         
@@ -967,8 +972,8 @@ if __name__ == "__main__":
     #     init_values=1.0,
     #     block_chunks=0
     # )
-    base_dir = '/media/diffusion'
-    folder_type = '0a5c013435/sampled_feature_256'
+    base_dir = '/home/student.unimelb.edu.au/xueyangk'
+    folder_type = 'fast-DiT/data'
     img_folder_type = 'rgb'
     filename = 'frame_000440.jpg'
     vae_features = 'frame_000440.npy'
@@ -986,7 +991,7 @@ if __name__ == "__main__":
     # Read a PIL image 
 
     ###############pre processing for dino features ############################
-    image = Image.open(os.path.join(base_dir, img_folder_type, filename)) 
+    image = Image.open(os.path.join(base_dir, folder_type, filename)) 
     
     # Define a transform to convert PIL  image to a Torch tensor 
     transform = transforms.Compose([ 
@@ -1001,23 +1006,50 @@ if __name__ == "__main__":
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
+    # Define the batch size
+    b = 32
+
+    feature_dim = 4 
+    img_height = 32 
+    img_width = 32
+    # Initialize random tensors
+    K = torch.randn(b, 3, 3, device='cuda')
+    R = torch.randn(b, 3, 3, device='cuda')
+    t = torch.randn(b, 3, 1, device='cuda')
+    src_feats = torch.randn(b, 32, 32, 4, device='cuda')
+    target_feats = torch.randn(b, 32, 32, 4, device='cuda')
+    N = img_width*img_height  # Example value for N, you can change it as needed
+
+    # Initialize random tensors
+    f_src_flat = torch.randn(b, 3, N, device='cuda')
+    tar_proj = torch.randn(b, 3, N, device='cuda')
+    # o_proj = torch.randn(b, 3, N, device='cuda')
+
+
+    epi_atten = EpipolarAttention(feature_dim, img_height, img_width)
+    epi_atten(tar_proj, f_src_flat, K, R, t)
+    # epi_atten(target_feats, tar_proj, o_proj)
+
     # transform = transforms.PILToTensor() 
     # Convert the PIL image to Torch tensor 
-    img_tensor = preprocess(image).to(device).unsqueeze(0)
-    print(img_tensor.shape) 
-    Dino = DINO().to(device)
-    dino_feats = Dino(img_tensor)
-    # print(dino_feats)
-    ###############pre processing for dino features ############################
+    # img_tensor = preprocess(image).to(device).unsqueeze(0)
+    # print(img_tensor.shape) 
 
-    model = DiT_models['DiT-XL/2'](
-        input_size=256 // 8,
-        num_classes=1000
-    )
-    t = torch.randint(0, 1000, (1,), device=device)
 
-    model = model.to(device)
-    model(feats, t, dino_feats, torch.zeros(1, dtype=int).to(device))
+    # ##########Dino feats##########
+    # Dino = DINO().to(device)
+    # dino_feats = Dino(img_tensor)
+    # # print(dino_feats)
+    # ###############pre processing for dino features ############################
+
+    # model = DiT_models['DiT-XL/2'](
+    #     input_size=256 // 8,
+    #     num_classes=1000
+    # )
+    # t = torch.randint(0, 1000, (1,), device=device)
+
+    # model = model.to(device)
+    # model(feats, t, dino_feats, torch.zeros(1, dtype=int).to(device))
 
     #EpipolarAttention
     # Example usage
