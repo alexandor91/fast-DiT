@@ -216,7 +216,18 @@ class EpipolarAttention(nn.Module):
         print(R.shape)
         print(self.f_tar_flat.shape)
         print(t.shape)
-        tar_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), self.f_tar_flat))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1) # Compute the epipolar line parameters
+        # Generate the index grid for the 32x32 grid
+        index_x, index_y = torch.meshgrid(torch.arange(self.img_height), torch.arange(self.img_width), indexing='ij')
+        index_x = index_x.reshape(-1)  # Flatten to a single dimension
+        index_y = index_y.reshape(-1)  # Flatten to a single dimension
+
+        # Create a combined index tensor of shape [1024, 3]
+        combined_indices = torch.stack((index_x, index_y, torch.ones_like(index_x)), dim=1)  # Shape [1024, 3]
+
+        # Repeat the combined index tensor for each batch element
+        combined_indices = combined_indices.unsqueeze(0).repeat(self.f_src_flat.size(0), 1, 1)  # Shape [8, 1024, 3]
+        combined_indices = combined_indices.view(-1, self.img_width, self.img_height, 3)
+        tar_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), combined_indices))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1) # Compute the epipolar line parameters
 
         origin = torch.tensor([0.0, 0.0, 0.0]).view(3, 1).unsqueeze(0).repeat(1, 1, self.img_height*self.img_width)  # Reshape affinity matrix
         o_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), origin))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))    #.squeeze(-1)
