@@ -280,9 +280,10 @@ def calculate_epipolar_line(point, fundamental_matrix):
 if __name__ == "__main__":
     # Example usage
 
-    base_dir = '/home/student.unimelb.edu.au/xueyangk/fast-DiT'
-    source_img = cv2.imread(os.path.join(base_dir, 'frame_000440.jpg'))
-    target_img = cv2.imread(os.path.join(base_dir, 'frame_000470.jpg'))
+    base_dir = '/home/student.unimelb.edu.au/xueyangk'
+    folder_type = 'fast-DiT/data'
+    source_img = cv2.imread(os.path.join(base_dir, folder_type, 'frame_000440.jpg'))
+    target_img = cv2.imread(os.path.join(base_dir, folder_type, 'frame_000470.jpg'))
 
     scene_id= '0a5c013435'
     focal_length_x = 1432.3682   #####target view  1431.4313

@@ -26,6 +26,7 @@ from sklearn.manifold import TSNE
 import umap
 from torch import nn, einsum
 from einops import rearrange, repeat
+import cv2
 
 # from dinov2.models import dinov2
 
@@ -110,35 +111,12 @@ class LabelEmbedder(nn.Module):
 #                            epipolar line mask                                 #
 #################################################################################
 def quaternion_to_rotation_matrix(quaternion):
-  """
-  Convert a quaternion to a 3x3 rotation matrix.
-
-  Args:
-      quaternion (torch.Tensor): 1D tensor representing the quaternion in the order [qw, qx, qy, qz].
-
-  Returns:
-      rotation_matrix (torch.Tensor): 3x3 rotation matrix.
-  """
-  qw, qx, qy, qz = quaternion.unbind(dim=1)
-
-  # Compute the elements of the rotation matrix
-  r11 = 1 - 2 * (qy**2 + qz**2)
-  r12 = 2 * (qx * qy - qw * qz)
-  r13 = 2 * (qx * qz + qw * qy)
-  r21 = 2 * (qx * qy + qw * qz)
-  r22 = 1 - 2 * (qx**2 + qz**2)
-  r23 = 2 * (qy * qz - qw * qx)
-  r31 = 2 * (qx * qz - qw * qy)
-  r32 = 2 * (qy * qz + qw * qx)
-  r33 = 1 - 2 * (qx**2 + qy**2)
-
-  # Create the rotation matrix
-  rotation_matrix = torch.stack([
-      [r11, r12, r13],
-      [r21, r22, r23],
-      [r31, r32, r33]], dim=1)
-
-  return rotation_matrix
+    w, x, y, z = quaternion
+    return torch.tensor([
+        [1 - 2*y**2 - 2*z**2, 2*x*y - 2*z*w, 2*x*z + 2*y*w],
+        [2*x*y + 2*z*w, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*x*w],
+        [2*x*z - 2*y*w, 2*y*z + 2*x*w, 1 - 2*x**2 - 2*y**2]
+    ], dtype=torch.float32, device=device)
 
 
 def compute_skew_symmetric(v):
@@ -239,7 +217,7 @@ class EpipolarAttention(nn.Module):
         # origin = origin.permute(0, 2, 1)        
         print(origin.shape)
 
-        o_proj = torch.bmm(K, torch.bmm(R, torch.bmm(torch.inverse(K), origin)) +  t.view(-1, 3, 1).repeat(1, 1, img_height * img_width).view(-1, 3, img_height * img_width))
+        o_proj = torch.bmm(K, torch.bmm(R, torch.bmm(torch.inverse(K), origin)) +  t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width).view(-1, 3, self.img_height * self.img_width))
         print(o_proj.shape)        
         #  p_i_t_j = torch.matmul(R_t_i, torch.inverse(K) @ p_target.unsqueeze(-1)) + t_t_i.unsqueeze(-1)  # Equation (8)
         
@@ -1005,13 +983,14 @@ if __name__ == "__main__":
     folder_type = 'fast-DiT/data'
     img_folder_type = 'rgb'
     filename = 'frame_000440.jpg'
-    vae_features = 'frame_000440.npy'
+    src_vae_features = 'frame_000440.npy'
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    feats = torch.from_numpy(np.load(os.path.join(base_dir, folder_type, vae_features))).to(device)
+    src_feats = torch.from_numpy(np.load(os.path.join(base_dir, folder_type, src_vae_features))).to(device)
+    tar_feats = src_feats
     print('#######feature shape######')
-    print(feats.shape)
+    print(src_feats.shape)
     # print(feats)
     # min_val = feats.min().item()
     # max_val = feats.max().item()
@@ -1035,31 +1014,107 @@ if __name__ == "__main__":
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    # Define the batch size
-    b = 8
-    feature_dim = 4 
-    img_height = 32 
-    img_width = 32
-    # Initialize random tensors
-    K = torch.randn(b, 3, 3, device='cuda', dtype=torch.float32)
-    R = torch.randn(b, 3, 3, device='cuda', dtype=torch.float32)
-    t = torch.randn(b, 3, 1, device='cuda', dtype=torch.float32)
-    f_src_flat = torch.randn(b, 32, 32, 4, device='cuda', dtype=torch.float32)
-    tar_proj = torch.randn(b, 32, 32, 4, device='cuda', dtype=torch.float32)
-    N = img_width*img_height  # Example value for N, you can change it as needed
+    # # Define the batch size
+    # b = 8
+    # feature_dim = 4 
+    # img_height = 32 
+    # img_width = 32
+    # # Initialize random tensors
+    # K = torch.randn(b, 3, 3, device='cuda', dtype=torch.float32)
+    # R = torch.randn(b, 3, 3, device='cuda', dtype=torch.float32)
+    # t = torch.randn(b, 3, 1, device='cuda', dtype=torch.float32)
+    # f_src_flat = torch.randn(b, 32, 32, 4, device='cuda', dtype=torch.float32)
+    # tar_proj = torch.randn(b, 32, 32, 4, device='cuda', dtype=torch.float32)
+    # N = img_width*img_height  # Example value for N, you can change it as needed
 
     # # Initialize random tensors
     # f_src_flat = torch.randn(b, 3, N, device='cuda')
     # tar_proj = torch.randn(b, 3, N, device='cuda')
 
-    print("########  main #########")
-    print(f_src_flat.shape)
-    print(tar_proj.shape)
+    # print("########  main #########")
+    # print(f_src_flat.shape)
+    # print(tar_proj.shape)
     # o_proj = torch.randn(b, 3, N, device='cuda')
+    # base_dir = '/home/student.unimelb.edu.au/xueyangk/fast-DiT'
+    source_img = cv2.imread(os.path.join(base_dir, folder_type, 'frame_000440.jpg'))
+    target_img = cv2.imread(os.path.join(base_dir, folder_type, 'frame_000470.jpg'))
+
+    # Define the camera parameters and transformation matrices
+    scene_id = '0a5c013435'
+    focal_length_x = 1432.3682
+    focal_length_y = 1432.3682
+    principal_point_x = 954.08276
+    principal_point_y = 724.18256
+
+    # Intrinsic matrices
+    src_intrinsic = np.array([[focal_length_x, 0, principal_point_x],
+                            [0, focal_length_y, principal_point_y],
+                            [0, 0, 1]])
+
+    focal_length_x2 = 1431.4313
+    focal_length_y2 = 1431.4313
+    principal_point_x2 = 954.7021
+    principal_point_y2 = 723.6698
+
+    tar_intrinsic = np.array([[focal_length_x2, 0, principal_point_x2],
+                            [0, focal_length_y2, principal_point_y2],
+                            [0, 0, 1]])
+
+    # Quaternions and translations
+    src_quatern = np.array([0.837752, 0.490157, -0.150019, 0.188181])
+    src_trans = np.array([0.158608, 1.22818, -1.60956])
+    tar_quatern = np.array([0.804066, 0.472639, -0.25357, 0.256501])
+    tar_trans = np.array([0.473911, 1.28311, -1.5215])
 
 
-    epi_atten = EpipolarAttention(feature_dim, img_height, img_width).to(device)
-    epi_atten(tar_proj, f_src_flat, K, R, t)
+    src_intrinsic = torch.tensor(src_intrinsic, dtype=torch.float32, device=device)
+    tar_intrinsic = torch.tensor(tar_intrinsic, dtype=torch.float32, device=device)
+    src_trans = torch.tensor(src_trans, dtype=torch.float32, device=device).view(3, 1)
+    tar_trans = torch.tensor(tar_trans, dtype=torch.float32, device=device).view(3, 1)
+
+    # Compute rotation matrices from quaternions
+    src_rot_mat = quaternion_to_rotation_matrix(src_quatern).to(device)
+    tar_rot_mat = quaternion_to_rotation_matrix(tar_quatern).to(device)
+
+    # Compute relative rotation matrix
+    relative_rot_mat = torch.matmul(tar_rot_mat, src_rot_mat.T)
+
+    # Homogeneous matrices
+    src_homo_mat = torch.tensor([[0.42891303, 0.40586197, 0.8070378, 1.4285464],
+                                [-0.06427293, -0.8774122, 0.4754123, 1.6330968],
+                                [0.9010566, -0.25578123, -0.35024756, -1.2047926],
+                                [0.0, 0.0, 0.0, 0.99999964]], dtype=torch.float32, device=device)
+
+    tar_homo_mat = torch.tensor([[0.19473474, 0.39851177, 0.8962516, 1.4587839],
+                                [-0.1672538, -0.8868709, 0.43068102, 1.642482],
+                                [0.966491, -0.23377006, -0.106051974, -1.1564484],
+                                [0.0, 0.0, 0.0, 0.9999995]], dtype=torch.float32, device=device)
+
+    # Compute relative homogeneous matrix
+    relative_homo_mat = torch.matmul(tar_homo_mat, torch.inverse(src_homo_mat))
+
+    # Example source pixel position
+    u = 600
+    v = 500
+    src_pt = torch.tensor([u, v], dtype=torch.float32, device=device)
+    print("#######relative homo######")
+    # print(relative_homo_mat[:3, 3])
+    # t_rel = tar_trans - tar_rot_mat @ src_rot_mat.T @ src_trans
+    print(src_feats.shape)
+    print(tar_feats.shape)
+    # # For tar_feats and src_feats
+    # tar_feats = tar_feats.unsqueeze(0).repeat(8, 1, 1, 1)
+    # src_feats = src_feats.unsqueeze(0).repeat(8, 1, 1, 1)
+
+    # For src_intrinsic and relative_homo_mat[:3, :3]
+    src_intrinsic = src_intrinsic.unsqueeze(0).repeat(1, 1, 1)
+    relative_homo_mat_R = relative_homo_mat[:3, :3].unsqueeze(0).repeat(1, 1, 1)
+
+    # For relative_homo_mat[:3, 3]
+    relative_homo_mat_T = relative_homo_mat[:3, 3].unsqueeze(0).repeat(1, 1, 1)
+
+    epi_atten = EpipolarAttention(src_feats.size(1), src_feats.size(2), src_feats.size(3)).to(device)
+    epi_atten(tar_feats, src_feats, src_intrinsic, relative_homo_mat_R, relative_homo_mat_T)
     # epi_atten(target_feats, tar_proj, o_proj)
 
     # transform = transforms.PILToTensor() 
