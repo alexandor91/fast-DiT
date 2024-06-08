@@ -212,33 +212,44 @@ class EpipolarAttention(nn.Module):
         
         # Compute the projeciting point and epipole points
         print("################tar proj tensor shape##############")
-        print(K.shape)
-        print(R.shape)
-        print(self.f_tar_flat.shape)
-        print(t.shape)
+        # print(K.shape)
+        # print(R.shape)
+        # print(self.f_tar_flat.shape)
+        # print(t.shape)
         # Generate the index grid for the 32x32 grid
-        index_x, index_y = torch.meshgrid(torch.arange(self.img_height), torch.arange(self.img_width), indexing='ij')
+        index_x, index_y = torch.meshgrid(torch.arange(self.img_height, device = 'cuda', dtype=torch.float32),    \
+                                          torch.arange(self.img_width, device = 'cuda', dtype=torch.float32), indexing='ij')
         index_x = index_x.reshape(-1)  # Flatten to a single dimension
         index_y = index_y.reshape(-1)  # Flatten to a single dimension
 
         # Create a combined index tensor of shape [1024, 3]
-        combined_indices = torch.stack((index_x, index_y, torch.ones_like(index_x)), dim=1)  # Shape [1024, 3]
+        combined_indices = torch.stack((index_x, index_y, torch.ones_like(index_x,  device='cuda', dtype=torch.float32)), dim=1)  # Shape [1024, 3]
 
         # Repeat the combined index tensor for each batch element
         combined_indices = combined_indices.unsqueeze(0).repeat(self.f_src_flat.size(0), 1, 1)  # Shape [8, 1024, 3]
-        combined_indices = combined_indices.view(-1, self.img_width, self.img_height, 3)
-        tar_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), combined_indices))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1) # Compute the epipolar line parameters
+        # combined_indices = combined_indices.view(-1, self.img_width, self.img_height, 3)
 
-        origin = torch.tensor([0.0, 0.0, 0.0]).view(3, 1).unsqueeze(0).repeat(1, 1, self.img_height*self.img_width)  # Reshape affinity matrix
-        o_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), origin))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))    #.squeeze(-1)
+        combined_indices = combined_indices.permute(0, 2, 1)  # Shape [8, 3, 1024]
+        print(combined_indices.shape)
+
+        tar_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), combined_indices))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1),  Compute the epipolar line parameters
+
+        origin = torch.tensor([0.0, 0.0, 0.0], device=device, dtype=torch.float32).view(3, 1).unsqueeze(0).repeat(self.f_src_flat.size(0), 1, self.img_height*self.img_width)  # Reshape affinity matrix
+        # o_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), origin))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))    #.squeeze(-1)
+        # origin = origin.permute(0, 2, 1)        
+        print(origin.shape)
+
+        o_proj = torch.bmm(K, torch.bmm(R, torch.bmm(torch.inverse(K), origin)) +  t.view(-1, 3, 1).repeat(1, 1, img_height * img_width).view(-1, 3, img_height * img_width))
+        print(o_proj.shape)        
         #  p_i_t_j = torch.matmul(R_t_i, torch.inverse(K) @ p_target.unsqueeze(-1)) + t_t_i.unsqueeze(-1)  # Equation (8)
         
         # Compute the epipolar lines based on the projected points and origin
         c = torch.linspace(-1, 1, steps=self.img_width)
-        epipolar_lines = o_proj + c * (tar_proj - o_proj)   ########## b x 3 x (h x w)
+        print(c.shape)
+        epipolar_lines = o_proj + (tar_proj - o_proj)   ########## b x 3 x (h x w)
         ########## it can be replaced by own epipolar implementation
 
-        d_epipolar = self.compute_epipolar_distance(self.f_src_flat, tar_proj, o_proj) #### b x N x N
+        d_epipolar = self.compute_epipolar_distance(combined_indices, tar_proj, o_proj) #### b x N x N
         epipolar_line_thre = 0.5
 
         weight_map = 1 - self.sigmoid(50 * (d_epipolar - epipolar_line_thre))
@@ -270,6 +281,10 @@ class EpipolarAttention(nn.Module):
         o_proj_expanded = o_proj.unsqueeze(3)  # Shape: b x 3 x N x 1
 
         # Compute the cross product between each column of f_src_flat and each column of o_proj
+        print("#######compute distance#############")
+        print(f_src_flat_expanded.shape)
+        print(o_proj_expanded.shape)
+        print(diff.shape)
         cross_prod = torch.cross(f_src_flat_expanded - o_proj_expanded, diff.unsqueeze(2), dim=1)  # Shape: b x 3 x N x N
 
         # Compute the norm of the cross product and the norm of the difference
@@ -995,13 +1010,13 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     feats = torch.from_numpy(np.load(os.path.join(base_dir, folder_type, vae_features))).to(device)
+    print('#######feature shape######')
     print(feats.shape)
     # print(feats)
     # min_val = feats.min().item()
     # max_val = feats.max().item()
     # print(min_val)
     # print(max_val)
-    print('#############')
     # Read a PIL image 
 
     ###############pre processing for dino features ############################
@@ -1026,11 +1041,11 @@ if __name__ == "__main__":
     img_height = 32 
     img_width = 32
     # Initialize random tensors
-    K = torch.randn(b, 3, 3, device='cuda')
-    R = torch.randn(b, 3, 3, device='cuda')
-    t = torch.randn(b, 3, 1, device='cuda')
-    f_src_flat = torch.randn(b, 32, 32, 4, device='cuda')
-    tar_proj = torch.randn(b, 32, 32, 4, device='cuda')
+    K = torch.randn(b, 3, 3, device='cuda', dtype=torch.float32)
+    R = torch.randn(b, 3, 3, device='cuda', dtype=torch.float32)
+    t = torch.randn(b, 3, 1, device='cuda', dtype=torch.float32)
+    f_src_flat = torch.randn(b, 32, 32, 4, device='cuda', dtype=torch.float32)
+    tar_proj = torch.randn(b, 32, 32, 4, device='cuda', dtype=torch.float32)
     N = img_width*img_height  # Example value for N, you can change it as needed
 
     # # Initialize random tensors
@@ -1043,7 +1058,7 @@ if __name__ == "__main__":
     # o_proj = torch.randn(b, 3, N, device='cuda')
 
 
-    epi_atten = EpipolarAttention(feature_dim, img_height, img_width)
+    epi_atten = EpipolarAttention(feature_dim, img_height, img_width).to(device)
     epi_atten(tar_proj, f_src_flat, K, R, t)
     # epi_atten(target_feats, tar_proj, o_proj)
 
