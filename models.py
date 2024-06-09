@@ -116,24 +116,50 @@ def quaternion_to_rotation_matrix(quaternion):
         [1 - 2*y**2 - 2*z**2, 2*x*y - 2*z*w, 2*x*z + 2*y*w],
         [2*x*y + 2*z*w, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*x*w],
         [2*x*z - 2*y*w, 2*y*z + 2*x*w, 1 - 2*x**2 - 2*y**2]
-    ], dtype=torch.float32, device=device)
+    ], dtype=torch.float32, device=quaternion.device)
 
 
 def compute_skew_symmetric(v):
-  """
-  Compute the skew-symmetric matrix from a 3D vector.
+    """
+    Compute the skew-symmetric matrix from a 3D vector.
+    
+    Args:
+        v (torch.Tensor): 3x1 vector.
+        
+    Returns:
+        M (torch.Tensor): 3x3 skew-symmetric matrix.
+    """
+    M = torch.tensor([[0, -v[2], v[1]],
+                      [v[2], 0, -v[0]],
+                      [-v[1], v[0], 0]], device=v.device)
+    return M
 
-  Args:
-      v (torch.Tensor): 3x1 vector.
+def compute_fundamental_matrix(K, K2, R, t):
+    """
+    Compute the fundamental matrix from intrinsic matrix and relative pose.
+    
+    Args:
+        K (torch.Tensor): 3x3 intrinsic matrix. Source view.
+        K2 (torch.Tensor): 3x3 intrinsic matrix. Target view.
+        R (torch.Tensor): 3x3 relative rotation matrix from target to source view.
+        t (torch.Tensor): 3x1 relative translation vector from target to source view.
+        
+    Returns:
+        F (torch.Tensor): 3x3 fundamental matrix.
+    """
+    # Compute the essential matrix
+    E = torch.mm(torch.mm(K2.t(), compute_skew_symmetric(t)), torch.mm(R, K))
+    
+    # Enforce the rank-2 constraint on the essential matrix
+    U, S, Vh = torch.svd(E)
+    S[2] = 0
+    E = torch.mm(torch.mm(U, torch.diag(S)), Vh.t())
+    
+    # Compute the fundamental matrix from the essential matrix
+    F = torch.mm(torch.mm(torch.pinverse(K2.t()), E), torch.pinverse(K))
+    
+    return F
 
-  Returns:
-      M (torch.Tensor): 3x3 skew-symmetric matrix.
-  """
-  M = torch.tensor([
-      [0, -v[2], v[1]],
-      [v[2], 0, -v[0]],
-      [-v[1], v[0], 0]], dtype=torch.float)
-  return M
 
 
 def compute_fundamental_matrix(K1, K2, R, t):
