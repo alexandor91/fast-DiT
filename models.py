@@ -34,6 +34,7 @@ def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
+
 #################################################################################
 #               Embedding Layers for Timesteps and Class Labels                 #
 #################################################################################
@@ -107,90 +108,99 @@ class LabelEmbedder(nn.Module):
         embeddings = self.embedding_table(labels)
         return embeddings
 
-#################################################################################
-#                            epipolar line mask                                 #
-#################################################################################
-def quaternion_to_rotation_matrix(quaternion):
-    w, x, y, z = quaternion
-    return torch.tensor([
-        [1 - 2*y**2 - 2*z**2, 2*x*y - 2*z*w, 2*x*z + 2*y*w],
-        [2*x*y + 2*z*w, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*x*w],
-        [2*x*z - 2*y*w, 2*y*z + 2*x*w, 1 - 2*x**2 - 2*y**2]
-    ], dtype=torch.float32, device=quaternion.device)
+######################################################################################
+#                            epipolar line mask                                      #
+#######################################################################################
+def quaternion_to_rotation_matrix(quaternions): #############tensor version#############
+    """
+    Converts a batch of quaternions to rotation matrices.
+    
+    Args:
+        quaternion (torch.Tensor): Tensor of shape (batch_size, 4)
+        
+    Returns:
+        torch.Tensor: Tensor of shape (batch_size, 3, 3)
+    """
+    w, x, y, z = quaternions[:, 0], quaternions[:, 1], quaternions[:, 2], quaternions[:, 3]
+    batch_size = quaternions.size(0)
+    return torch.stack([
+        torch.stack([1 - 2*y**2 - 2*z**2, 2*x*y - 2*z*w, 2*x*z + 2*y*w], dim=1),
+        torch.stack([2*x*y + 2*z*w, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*x*w], dim=1),
+        torch.stack([2*x*z - 2*y*w, 2*y*z + 2*x*w, 1 - 2*x**2 - 2*y**2], dim=1)
+    ], dim=1).reshape(batch_size, 3, 3)
+    
 
-
-def compute_skew_symmetric(v):
+def compute_skew_symmetric(v):   ###################tensor version########
     """
     Compute the skew-symmetric matrix from a 3D vector.
     
     Args:
-        v (torch.Tensor): 3x1 vector.
+        v (torch.Tensor): Tensor of shape (batch_size, 3)
         
     Returns:
-        M (torch.Tensor): 3x3 skew-symmetric matrix.
+        torch.Tensor: Tensor of shape (batch_size, 3, 3)
     """
-    M = torch.tensor([[0, -v[2], v[1]],
-                      [v[2], 0, -v[0]],
-                      [-v[1], v[0], 0]], device=v.device)
+    batch_size = v.size(0)
+    M = torch.zeros((batch_size, 3, 3), device=v.device)
+    M[:, 0, 1] = -v[:, 2]
+    M[:, 0, 2] = v[:, 1]
+    M[:, 1, 0] = v[:, 2]
+    M[:, 1, 2] = -v[:, 0]
+    M[:, 2, 0] = -v[:, 1]
+    M[:, 2, 1] = v[:, 0]
+    
     return M
 
-def compute_fundamental_matrix(K, K2, R, t):
+def compute_fundamental_matrix(K1, K2, R, t):     ###############tensor version########
     """
-    Compute the fundamental matrix from intrinsic matrix and relative pose.
-    
+    Compute the fundamental matrix from intrinsic matrices and relative pose.
+
     Args:
-        K (torch.Tensor): 3x3 intrinsic matrix. Source view.
-        K2 (torch.Tensor): 3x3 intrinsic matrix. Target view.
-        R (torch.Tensor): 3x3 relative rotation matrix from target to source view.
-        t (torch.Tensor): 3x1 relative translation vector from target to source view.
-        
+        K1 (torch.Tensor): Tensor of shape (batch_size, 3, 3). Source view intrinsic matrix.
+        K2 (torch.Tensor): Tensor of shape (batch_size, 3, 3). Target view intrinsic matrix.
+        R (torch.Tensor): Tensor of shape (batch_size, 3, 3). Relative rotation matrix from target to source view.
+        t (torch.Tensor): Tensor of shape (batch_size, 3). Relative translation vector from target to source view.
+
     Returns:
-        F (torch.Tensor): 3x3 fundamental matrix.
+        F (torch.Tensor): Tensor of shape (batch_size, 3, 3). Fundamental matrix.
     """
-    # Compute the essential matrix
-    E = torch.mm(torch.mm(K2.t(), compute_skew_symmetric(t)), torch.mm(R, K))
+    batch_size = K1.size(0)
+    
+    # Compute the essential matrix (using torch.bmm for batch matrix multiplication)
+    t_skew = compute_skew_symmetric(t)
+    E = torch.bmm(K2.transpose(1, 2), torch.bmm(t_skew, torch.bmm(R, K1)))
     
     # Enforce the rank-2 constraint on the essential matrix
-    U, S, Vh = torch.svd(E)
-    S[2] = 0
-    E = torch.mm(torch.mm(U, torch.diag(S)), Vh.t())
+    U, S, Vt = torch.linalg.svd(E)
+    S[:, 2] = 0
+    E = torch.bmm(U, torch.bmm(torch.diag_embed(S), Vt))
     
-    # Compute the fundamental matrix from the essential matrix
-    F = torch.mm(torch.mm(torch.pinverse(K2.t()), E), torch.pinverse(K))
+    # Compute the fundamental matrix from the essential matrix (using torch.inverse)
+    F = torch.bmm(torch.inverse(K2.transpose(1, 2)), torch.bmm(E, torch.inverse(K1)))
     
     return F
 
+def calculate_epipolar_lines(points, fundamental_matrices):
+    """
+    Calculates the epipolar lines corresponding to points in the target view given the fundamental matrix.
 
+    Args:
+        points: A torch tensor of shape (batch_size, 3, N) representing the point coordinates (u, v, 1) in homogeneous coordinates in the target view.
+        fundamental_matrices: A torch tensor of shape (batch_size, 3, 3) representing the fundamental matrices.
 
-def compute_fundamental_matrix(K1, K2, R, t):
-  """
-  Compute the fundamental matrix from intrinsic matrix and relative pose.
-
-  Args:
-      K1 (torch.Tensor): 3x3 intrinsic matrix. Source view
-      K2 (torch.Tensor): 3x3 intrinsic matrix. Target view
-      R (torch.Tensor): 3x3 relative rotation matrix from target to source view.
-      t (torch.Tensor): 3x1 relative translation vector from target to source view.
-
-  Returns:
-      F (torch.Tensor): 3x3 fundamental matrix.
-  """
-  # Move tensors to CUDA if available
-  device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-  K1, K2, R, t = K1.to(device), K2.to(device), R.to(device), t.to(device)
-
-  # Compute the essential matrix (using torch.bmm for batch matrix multiplication)
-  E = torch.bmm(K2.transpose(1, 2), torch.bmm(compute_skew_symmetric(t), torch.bmm(R, K1)))
-
-  # Enforce the rank-2 constraint on the essential matrix
-  U, S, Vt = torch.linalg.svd(E)
-  S[2] = 0
-  E = torch.bmm(U, torch.diag(S)) @ Vt
-
-  # Compute the fundamental matrix from the essential matrix (using torch.inverse)
-  F = torch.bmm(torch.inverse(K2.transpose(1, 2)), torch.bmm(E, torch.inverse(K1)))
-
-  return F.to(device)  # Move the result back to CPU for further processing
+    Returns:
+        A torch tensor of shape (batch_size, 3, N) representing the epipolar lines in homogeneous coordinates.
+    """
+    # Ensure points are in homogeneous coordinates and shape (batch_size, 3, N)
+    assert points.shape[1] == 3, "Input points should have shape (batch_size, 3, N)"
+    
+    # Calculate the epipolar lines using the fundamental matrices (batch matrix multiplication)
+    epipolar_lines = torch.bmm(fundamental_matrices, points)
+    
+    # Normalize the epipolar lines
+    epipolar_lines /= epipolar_lines[:, 2:3, :]
+    
+    return epipolar_lines
 
 ###################epipolar attention###################################
 class EpipolarAttention(nn.Module):
@@ -210,7 +220,7 @@ class EpipolarAttention(nn.Module):
 
         self.f_src_flat = f_src.view(-1, self.feature_dim, self.img_height * self.img_width)  # Flatten the spatial dimensions
         self.f_tar_flat = f_tar.view(-1, self.feature_dim, self.img_height * self.img_width)    # Flatten the spatial dimensions
-        # A_ij = torch.matmul(f_tar_flat.permute(0, 2, 1), f_src_flat.permute(0, 2, 1))  # Compute affinity matrix (batch_size  feat_dim token_num)
+        # A_ij = torch.matmul(f_tar_flat.permute(0, 2, 1), f_src_flat.permute(0, 2, ))  # Compute affinity matrix (batch_size  feat_dim token_num)
         A = torch.einsum('bik,bkj->bij',  self.f_src_flat.permute(0, 2, 1), self.f_tar_flat)
         A = A.view(-1, self.img_height * self.img_width, self.img_height * self.img_width)  # Reshape affinity matrix
         
@@ -235,7 +245,9 @@ class EpipolarAttention(nn.Module):
 
         combined_indices = combined_indices.permute(0, 2, 1)  # Shape [8, 3, 1024]
         print(combined_indices.shape)
+        print(K.shape)
 
+        # F_Matrix = compute_fundamental_matrix(K, K, R, t)
         tar_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), combined_indices))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1),  Compute the epipolar line parameters
 
         origin = torch.tensor([0.0, 0.0, 0.0], device=device, dtype=torch.float32).view(3, 1).unsqueeze(0).repeat(self.f_src_flat.size(0), 1, self.img_height*self.img_width)  # Reshape affinity matrix
@@ -271,6 +283,8 @@ class EpipolarAttention(nn.Module):
         # f_src_attended = torch.matmul(f_src_flat, attention_map)  # Apply the attention map
         f_src_attended = f_src_attended.view(-1, self.feature_dim, self.img_height, self.img_width)
         
+        print("##############fusion attention output after epipolar attention map")
+        print(f_src_attended)
         return f_src_attended
 
     def compute_epipolar_distance(self, f_src_flat, tar_proj, o_proj):
@@ -297,8 +311,11 @@ class EpipolarAttention(nn.Module):
 
         # Compute the distance d_epipolar
         d_epipolar = cross_prod_norm / diff_norm  # Shape: b x N x N
+        print("#####epipolar distance output calcualted here !#####")
+        print(d_epipolar)
         return d_epipolar #### b x 1 x (h x w)
     
+
     # def epipolar_line_computation(p_target, K, R, t):
     #     """
     #     Compute the epipolar line on the source view image plane.
@@ -1013,7 +1030,10 @@ if __name__ == "__main__":
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    batch_size = 6
     src_feats = torch.from_numpy(np.load(os.path.join(base_dir, folder_type, src_vae_features))).to(device)
+    src_feats = src_feats.repeat(batch_size, 1, 1, 1)
+
     tar_feats = src_feats
     print('#######feature shape######')
     print(src_feats.shape)
@@ -1092,32 +1112,40 @@ if __name__ == "__main__":
     tar_quatern = np.array([0.804066, 0.472639, -0.25357, 0.256501])
     tar_trans = np.array([0.473911, 1.28311, -1.5215])
 
-
-    src_intrinsic = torch.tensor(src_intrinsic, dtype=torch.float32, device=device)
-    tar_intrinsic = torch.tensor(tar_intrinsic, dtype=torch.float32, device=device)
-    src_trans = torch.tensor(src_trans, dtype=torch.float32, device=device).view(3, 1)
-    tar_trans = torch.tensor(tar_trans, dtype=torch.float32, device=device).view(3, 1)
-
-    # Compute rotation matrices from quaternions
-    src_rot_mat = quaternion_to_rotation_matrix(src_quatern).to(device)
-    tar_rot_mat = quaternion_to_rotation_matrix(tar_quatern).to(device)
-
-    # Compute relative rotation matrix
-    relative_rot_mat = torch.matmul(tar_rot_mat, src_rot_mat.T)
-
     # Homogeneous matrices
-    src_homo_mat = torch.tensor([[0.42891303, 0.40586197, 0.8070378, 1.4285464],
+    src_homo_mat_sample = np.array([[0.42891303, 0.40586197, 0.8070378, 1.4285464],
                                 [-0.06427293, -0.8774122, 0.4754123, 1.6330968],
                                 [0.9010566, -0.25578123, -0.35024756, -1.2047926],
-                                [0.0, 0.0, 0.0, 0.99999964]], dtype=torch.float32, device=device)
+                                [0.0, 0.0, 0.0, 0.99999964]])
 
-    tar_homo_mat = torch.tensor([[0.19473474, 0.39851177, 0.8962516, 1.4587839],
+    tar_homo_mat_sample = np.array([[0.19473474, 0.39851177, 0.8962516, 1.4587839],
                                 [-0.1672538, -0.8868709, 0.43068102, 1.642482],
                                 [0.966491, -0.23377006, -0.106051974, -1.1564484],
-                                [0.0, 0.0, 0.0, 0.9999995]], dtype=torch.float32, device=device)
+                                [0.0, 0.0, 0.0, 0.9999995]])
 
+
+    src_homo_mat = torch.tensor([src_homo_mat_sample] * batch_size, dtype=torch.float32, device=device)
+    tar_homo_mat = torch.tensor([tar_homo_mat_sample] * batch_size, dtype=torch.float32, device=device)
+
+    src_intrinsic = torch.tensor([src_intrinsic] * batch_size, dtype=torch.float32, device=device)
+    tar_intrinsic = torch.tensor([tar_intrinsic] * batch_size, dtype=torch.float32, device=device)
+    src_trans = torch.tensor([src_trans] * batch_size, dtype=torch.float32, device=device).view(-1, 3, 1)
+    tar_trans = torch.tensor([tar_trans] * batch_size, dtype=torch.float32, device=device).view(-1, 3, 1)
+    src_quaterns = torch.tensor([src_quatern] * batch_size, dtype=torch.float32, device=device)
+    tar_quaterns = torch.tensor([tar_quatern] * batch_size, dtype=torch.float32, device=device)
+    print("###########!!!!!!!!!!!!!!!!!!!###############")
+    print(src_trans.shape)
+    print(tar_trans.shape)
+    print(src_homo_mat.shape)
+    # Compute rotation matrices from quaternions
+    src_rot_mat = quaternion_to_rotation_matrix(src_quaterns).to(device)
+    tar_rot_mat = quaternion_to_rotation_matrix(tar_quaterns).to(device)
+
+    # Compute relative rotation matrix
+    relative_rot_mat = torch.bmm(tar_rot_mat, src_rot_mat.transpose(1, 2))
     # Compute relative homogeneous matrix
-    relative_homo_mat = torch.matmul(tar_homo_mat, torch.inverse(src_homo_mat))
+    relative_homo_mat = torch.bmm(tar_homo_mat, torch.linalg.inv(src_homo_mat))
+    # relative_homo_mat = torch.matmul(tar_homo_mat, torch.inverse(src_homo_mat))
 
     # Example source pixel position
     u = 600
@@ -1133,11 +1161,15 @@ if __name__ == "__main__":
     # src_feats = src_feats.unsqueeze(0).repeat(8, 1, 1, 1)
 
     # For src_intrinsic and relative_homo_mat[:3, :3]
-    src_intrinsic = src_intrinsic.unsqueeze(0).repeat(1, 1, 1)
-    relative_homo_mat_R = relative_homo_mat[:3, :3].unsqueeze(0).repeat(1, 1, 1)
+    # src_intrinsic = src_intrinsic.unsqueeze(0).repeat(1, 1, 1)
+    # relative_homo_mat_R = relative_homo_mat[:3, :3].unsqueeze(0).repeat(1, 1, 1)
+
+    # # For relative_homo_mat[:3, 3]
+    # relative_homo_mat_T = relative_homo_mat[:3, 3].unsqueeze(0).repeat(1, 1, 1)
+    relative_homo_mat_R = relative_homo_mat[:, :3, :3]
 
     # For relative_homo_mat[:3, 3]
-    relative_homo_mat_T = relative_homo_mat[:3, 3].unsqueeze(0).repeat(1, 1, 1)
+    relative_homo_mat_T = relative_homo_mat[:, :3, 3]
 
     epi_atten = EpipolarAttention(src_feats.size(1), src_feats.size(2), src_feats.size(3)).to(device)
     epi_atten(tar_feats, src_feats, src_intrinsic, relative_homo_mat_R, relative_homo_mat_T)
