@@ -27,6 +27,8 @@ import umap
 from torch import nn, einsum
 from einops import rearrange, repeat
 import cv2
+import matplotlib.pyplot as plt
+
 
 # from dinov2.models import dinov2
 
@@ -165,10 +167,15 @@ def compute_fundamental_matrix(K1, K2, R, t):     ###############tensor version#
         F (torch.Tensor): Tensor of shape (batch_size, 3, 3). Fundamental matrix.
     """
     batch_size = K1.size(0)
-    
+    print("############$$$$$$$$$$$$$$$$$$$##############")
+    print(K1)
+    print(K2)
+    print(R)
+    print(t)
     # Compute the essential matrix (using torch.bmm for batch matrix multiplication)
     t_skew = compute_skew_symmetric(t)
-    E = torch.bmm(K2.transpose(1, 2), torch.bmm(t_skew, torch.bmm(R, K1)))
+    # E = torch.bmm(K2.transpose(1, 2), torch.bmm(t_skew, torch.bmm(R, K1)))
+    E = torch.bmm(t_skew, R)
     
     # Enforce the rank-2 constraint on the essential matrix
     U, S, Vt = torch.linalg.svd(E)
@@ -202,6 +209,64 @@ def calculate_epipolar_lines(points, fundamental_matrices):
     
     return epipolar_lines
 
+def visualize_attention_map(attention_map, batch_idx=0, column_idx=600, save_path='attention_map_visualization.png'):
+    """
+    Visualizes and saves an attention map tensor as an image.
+    
+    Args:
+        attention_map (torch.Tensor): The attention map tensor with shape [batch_size, height, width].
+        batch_idx (int): Index of the batch to visualize.
+        row_idx (int): Index of the row to visualize in the attention map.
+        save_path (str): Path to save the image.
+    """
+    # Ensure the batch and row indices are within range
+    # if batch_idx >= attention_map.size(0):
+    #     raise ValueError("batch_idx is out of range.")
+    # if row_idx >= attention_map.size(1):
+    #     raise ValueError("row_idx is out of range.")
+
+    # Select the batch and row
+    print("########$$$$$$$$attention map$$$$$$$$$$$$#########")
+    print(attention_map.shape)
+
+    # attention_map = attention_map.permute(0, 2, 1)
+    single_attention_map_batch_row = attention_map[batch_idx, :, column_idx]
+    # Step 1: Reshape the tensor to (1024, 32, 32)
+    reshaped_tensor = attention_map[0, :, :].view(1024, 32, 32)
+    # Step 2: Rearrange these 32x32 images into a single 32x32 layout
+    grid_size = 32
+    grid_image = reshaped_tensor.view(grid_size, grid_size, 32, 32)
+    grid_image = grid_image.permute(0, 2, 1, 3).contiguous()
+    grid_image = grid_image.view(grid_size * 32, grid_size * 32)
+    # Reshape the selected row to 32x32
+    single_attention_map_reshaped = single_attention_map_batch_row.view(32, 32)
+
+    # Normalize the tensor to the range [0, 255]
+    attention_map_min = grid_image.min()
+    attention_map_max = grid_image.max()
+    attention_map_normalized = (grid_image - attention_map_min) / (attention_map_max - attention_map_min) * 255
+    # Convert to numpy array and ensure the type is uint8
+    attention_map_normalized = attention_map_normalized.cpu().numpy().astype(np.uint8)
+
+    single_attention_map_min = single_attention_map_reshaped.min()
+    single_attention_map_max = single_attention_map_reshaped.max()
+    single_attention_map_normalized = (single_attention_map_reshaped - single_attention_map_min) / (single_attention_map_max - single_attention_map_min) * 255
+    single_attention_map_normalized = single_attention_map_normalized.cpu().numpy().astype(np.uint8)
+
+    # Save the tensor as an image
+    image = Image.fromarray(attention_map_normalized)
+    image.save(save_path)
+
+    single_image = Image.fromarray(single_attention_map_normalized)
+    new_path ='single_'+ save_path
+    single_image.save(new_path)
+    # Optionally, display the image using matplotlib
+    # plt.imshow(attention_map_normalized, cmap='gray')
+    # plt.title(f'Attention Map Visualization (Batch {batch_idx}, Row {row_idx})')
+    # plt.axis('off')
+    # plt.show()
+
+
 ###################epipolar attention###################################
 class EpipolarAttention(nn.Module):
     def __init__(self, feature_dim, img_height, img_width):
@@ -211,21 +276,22 @@ class EpipolarAttention(nn.Module):
         self.img_width = img_width
         self.sigmoid = nn.Softmax(dim=-1)     # nn.Sigmoid()
     
-    def forward(self, f_tar, f_src, K, R, t): ############# f_tar,  f_src is b x 3 x 1 as img pixel location, 
+    def forward(self, f_tar, f_src, K1, K2, R, t, origin1, origin2): ############# f_tar,  f_src is b x 3 x 1 as img pixel location, 
         ########## K in b x 3 x3, R in b x 3 x3, t b x 3 x1 
         # Compute the cross-view attention
         print("################input tensor shape##############")
         print(f_src.shape)
         print(f_tar.shape)
-
         self.f_src_flat = f_src.view(-1, self.feature_dim, self.img_height * self.img_width)  # Flatten the spatial dimensions
         self.f_tar_flat = f_tar.view(-1, self.feature_dim, self.img_height * self.img_width)    # Flatten the spatial dimensions
         # A_ij = torch.matmul(f_tar_flat.permute(0, 2, 1), f_src_flat.permute(0, 2, ))  # Compute affinity matrix (batch_size  feat_dim token_num)
         A = torch.einsum('bik,bkj->bij',  self.f_src_flat.permute(0, 2, 1), self.f_tar_flat)
         A = A.view(-1, self.img_height * self.img_width, self.img_height * self.img_width)  # Reshape affinity matrix
+        batch_size =self.f_src_flat.size(0)
         
         # Compute the projeciting point and epipole points
         print("################tar proj tensor shape##############")
+        print(self.f_src_flat.permute(0, 2, 1).shape)
         # print(K.shape)
         # print(R.shape)
         # print(self.f_tar_flat.shape)
@@ -240,23 +306,69 @@ class EpipolarAttention(nn.Module):
         combined_indices = torch.stack((index_x, index_y, torch.ones_like(index_x,  device='cuda', dtype=torch.float32)), dim=1)  # Shape [1024, 3]
 
         # Repeat the combined index tensor for each batch element
-        combined_indices = combined_indices.unsqueeze(0).repeat(self.f_src_flat.size(0), 1, 1)  # Shape [8, 1024, 3]
+        combined_indices = combined_indices.unsqueeze(0).repeat(batch_size, 1, 1)  # Shape [batch_size, 1024, 3]
         # combined_indices = combined_indices.view(-1, self.img_width, self.img_height, 3)
 
         combined_indices = combined_indices.permute(0, 2, 1)  # Shape [8, 3, 1024]
+        print("################image index shape##############")
         print(combined_indices.shape)
-        print(K.shape)
+        # print(K.shape)
 
-        # F_Matrix = compute_fundamental_matrix(K, K, R, t)
-        tar_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), combined_indices))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1),  Compute the epipolar line parameters
+        F_Matrix = compute_fundamental_matrix(K1, K2, R, t)
+        print("################F matrix $$$$$$$$$$##############")
+        print(F_Matrix)
+        # epipolar_lines = torch.mv(F_Matrix[0, :, :], combined_indices[0, :, 512])
+        # # Normalize the epipolar lines
 
-        origin = torch.tensor([0.0, 0.0, 0.0], device=device, dtype=torch.float32).view(3, 1).unsqueeze(0).repeat(self.f_src_flat.size(0), 1, self.img_height*self.img_width)  # Reshape affinity matrix
+        # ##############single point foreipolar line mapping verification##################
+        # print(combined_indices[0, :, 10])
+        # epipolar_lines2 = epipolar_lines.clone()
+
+        # # Normalize the epipolar lines by the third element
+        # epipolar_lines /= epipolar_lines2[-1]
+        # # Ensure the epipolar lines are of shape (3,) and reshape as needed
+        # epipolar_lines = epipolar_lines[:3].reshape(1, -1).reshape(-1)
+        # # Compute the line endpoints based on the image dimensions
+        # # x1, y1 = 0, int(-c / b)
+        # # x2, y2 = width, int(-(c + a * width) / b)
+        # # Compute the line endpoints based on the image dimensions
+        # x0, y0 = [0, int(-epipolar_lines[2] / epipolar_lines[1])]
+        # x1, y1 = [self.img_width, int(-(epipolar_lines[2] + epipolar_lines[0] * self.img_width) / epipolar_lines[1])]
+
+        # print(x0)
+        # print(y0)
+        # print(x1)
+        # print(y1)
+        # Calculate epipolar lines
+        epipolar_lines = torch.bmm(F_Matrix, combined_indices)  # Shape: (batch_size, 3, 1024)
+        
+        # Normalize the epipolar lines by the third element
+        epipolar_lines = epipolar_lines / epipolar_lines[:, 2:3, :]
+        
+        # Compute the line endpoints based on the image dimensions
+        x0 = torch.zeros(batch_size, 1, 1024, device=epipolar_lines.device)
+        y0 = -epipolar_lines[:, 2:3, :] / epipolar_lines[:, 1:2, :]
+        point_0 = torch.cat((x0, y0, torch.ones(batch_size, 1, 1024, device=epipolar_lines.device)), dim=1)  # Shape: (batch_size, 3, 1024)
+        
+        x1 = torch.full((batch_size, 1, 1024), self.img_width, device=epipolar_lines.device)
+        y1 = -(epipolar_lines[:, 2:3, :] + epipolar_lines[:, 0:1, :] * self.img_width) / epipolar_lines[:, 1:2, :]
+        point_1 = torch.cat((x1, y1, torch.ones(batch_size, 1, 1024, device=epipolar_lines.device)), dim=1)  # Shape: (batch_size, 3, 1024)
+
+        print(epipolar_lines.shape)
+        tar_proj = torch.bmm(K2, (torch.bmm(R, (torch.bmm(torch.inverse(K1), combined_indices))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))   #.squeeze(-1),  Compute the epipolar line parameters
+
+        origin = torch.tensor([0.0, 0.0, 0.0], device=device, dtype=torch.float32).view(3, 1).unsqueeze(0).repeat(batch_size, 1, self.img_height*self.img_width)  # Reshape affinity matrix
         # o_proj = torch.bmm(K, (torch.bmm(R, (torch.bmm(torch.inverse(K), origin))) + t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width)))    #.squeeze(-1)
         # origin = origin.permute(0, 2, 1)        
+        print()
+        print(tar_proj)
         print(origin.shape)
-
-        o_proj = torch.bmm(K, torch.bmm(R, torch.bmm(torch.inverse(K), origin)) +  t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width).view(-1, 3, self.img_height * self.img_width))
-        print(o_proj.shape)        
+        
+        o_proj = torch.bmm(K2, torch.bmm(R, torch.bmm(torch.inverse(K1), origin)) +  t.view(-1, 3, 1).repeat(1, 1, self.img_height * self.img_width).view(-1, 3, self.img_height * self.img_width))
+        print(o_proj)
+        print(o_proj.shape)
+        # print(o_proj)  
+        # print(tar_proj)      
         #  p_i_t_j = torch.matmul(R_t_i, torch.inverse(K) @ p_target.unsqueeze(-1)) + t_t_i.unsqueeze(-1)  # Equation (8)
         
         # Compute the epipolar lines based on the projected points and origin
@@ -265,26 +377,28 @@ class EpipolarAttention(nn.Module):
         epipolar_lines = o_proj + (tar_proj - o_proj)   ########## b x 3 x (h x w)
         ########## it can be replaced by own epipolar implementation
 
-        d_epipolar = self.compute_epipolar_distance(combined_indices, tar_proj, o_proj) #### b x N x N
-        epipolar_line_thre = 0.5
+        d_epipolar = self.compute_epipolar_distance(combined_indices, point_0, point_1) #### b x N x N
+        epipolar_line_thre = 0.10
 
-        weight_map = 1 - self.sigmoid(50 * (d_epipolar - epipolar_line_thre))
+        weight_map = 1 - self.sigmoid(5 * (d_epipolar - epipolar_line_thre))
         # self.compute_weight_map(f_src_flat, d_epipolar, epipolar_line_thre)
         
         # Apply epipolar attention
-        A_weighted_flat = A * weight_map  # Weight the affinity matrix
+        A_weighted = weight_map  # Weight the affinity matrix
+        # A_weighted = A * weight_map  # Weight the affinity matrix
         # A_weighted_flat = A_weighted.view(-1, self.img_height * self.img_width, self.img_height * self.img_width)
 
 
-        attention_map = F.softmax(A_weighted_flat, dim=1) ####attention over the row
-        
+        attention_map = F.softmax(A_weighted, dim=1) ####attention over the row
+        visualize_attention_map(attention_map)
         # Compute the output of the epipolar attention layer
         f_src_attended = torch.einsum('bik,bkj->bij',  attention_map, self.f_src_flat.permute(0, 2, 1))
+        print("##############fusion attention output after epipolar attention map##########")
+        print(attention_map.shape)
+        print(f_src_attended.shape)
         # f_src_attended = torch.matmul(f_src_flat, attention_map)  # Apply the attention map
         f_src_attended = f_src_attended.view(-1, self.feature_dim, self.img_height, self.img_width)
         
-        print("##############fusion attention output after epipolar attention map")
-        print(f_src_attended)
         return f_src_attended
 
     def compute_epipolar_distance(self, f_src_flat, tar_proj, o_proj):
@@ -312,9 +426,10 @@ class EpipolarAttention(nn.Module):
         # Compute the distance d_epipolar
         d_epipolar = cross_prod_norm / diff_norm  # Shape: b x N x N
         print("#####epipolar distance output calcualted here !#####")
-        print(d_epipolar)
+        print(d_epipolar.shape)
         return d_epipolar #### b x 1 x (h x w)
     
+
 
     # def epipolar_line_computation(p_target, K, R, t):
     #     """
@@ -1028,13 +1143,17 @@ if __name__ == "__main__":
     filename = 'frame_000440.jpg'
     src_vae_features = 'frame_000440.npy'
 
+    filename2 = 'frame_000470.jpg'
+    tar_vae_features = 'frame_000470.npy'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     batch_size = 6
     src_feats = torch.from_numpy(np.load(os.path.join(base_dir, folder_type, src_vae_features))).to(device)
     src_feats = src_feats.repeat(batch_size, 1, 1, 1)
+    tar_feats = torch.from_numpy(np.load(os.path.join(base_dir, folder_type, tar_vae_features))).to(device)
+    tar_feats = tar_feats.repeat(batch_size, 1, 1, 1)
 
-    tar_feats = src_feats
+    # tar_feats = src_feats
     print('#######feature shape######')
     print(src_feats.shape)
     # print(feats)
@@ -1113,16 +1232,23 @@ if __name__ == "__main__":
     tar_trans = np.array([0.473911, 1.28311, -1.5215])
 
     # Homogeneous matrices
-    src_homo_mat_sample = np.array([[0.42891303, 0.40586197, 0.8070378, 1.4285464],
-                                [-0.06427293, -0.8774122, 0.4754123, 1.6330968],
-                                [0.9010566, -0.25578123, -0.35024756, -1.2047926],
-                                [0.0, 0.0, 0.0, 0.99999964]])
+    # src_homo_mat_sample = np.array([[0.42891303, 0.40586197, 0.8070378, 1.4285464], #########aligne pose
+    #                             [-0.06427293, -0.8774122, 0.4754123, 1.6330968],
+    #                             [0.9010566, -0.25578123, -0.35024756, -1.2047926],
+    #                             [0.0, 0.0, 0.0, 0.99999964]])
+    src_homo_mat_sample = np.array([[0.42891303, 0.40586197, 0.8070378, 1.4285464], ###########raw source pose
+            [-0.06427293, -0.8774122, 0.4754123, 1.6330968],
+            [0.9010566, -0.25578123, -0.35024756, -1.2047926],
+            [0.0, 0.0, 0.0, 0.99999964]])
 
-    tar_homo_mat_sample = np.array([[0.19473474, 0.39851177, 0.8962516, 1.4587839],
-                                [-0.1672538, -0.8868709, 0.43068102, 1.642482],
-                                [0.966491, -0.23377006, -0.106051974, -1.1564484],
-                                [0.0, 0.0, 0.0, 0.9999995]])
-
+    # tar_homo_mat_sample = np.array([[0.19473474, 0.39851177, 0.8962516, 1.4587839], ############aligned pose
+    #                             [-0.1672538, -0.8868709, 0.43068102, 1.642482],
+    #                             [0.966491, -0.23377006, -0.106051974, -1.1564484],
+    #                             [0.0, 0.0, 0.0, 0.9999995]])
+    tar_homo_mat_sample = np.array([[0.19473474, 0.39851177, 0.8962516, 1.4587839], ########raw target pose
+            [-0.1672538, -0.8868709, 0.43068102, 1.642482],
+            [0.966491, -0.23377006, -0.106051974, -1.1564484],
+            [0.0, 0.0, 0.0, 0.9999995]])
 
     src_homo_mat = torch.tensor([src_homo_mat_sample] * batch_size, dtype=torch.float32, device=device)
     tar_homo_mat = torch.tensor([tar_homo_mat_sample] * batch_size, dtype=torch.float32, device=device)
@@ -1172,7 +1298,7 @@ if __name__ == "__main__":
     relative_homo_mat_T = relative_homo_mat[:, :3, 3]
 
     epi_atten = EpipolarAttention(src_feats.size(1), src_feats.size(2), src_feats.size(3)).to(device)
-    epi_atten(tar_feats, src_feats, src_intrinsic, relative_homo_mat_R, relative_homo_mat_T)
+    epi_atten(tar_feats, src_feats, src_intrinsic, tar_intrinsic, relative_homo_mat_R, relative_homo_mat_T, [0, 0, 0], [0, 0, 0])
     # epi_atten(target_feats, tar_proj, o_proj)
 
     # transform = transforms.PILToTensor() 

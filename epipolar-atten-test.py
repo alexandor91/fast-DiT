@@ -62,8 +62,13 @@ def compute_fundamental_matrix(K, K2, R, t):
     Returns:
         F (np.ndarray): 3x3 fundamental matrix.
     """
+    print("#######fundamental inputs@@@@@@@@@@@########")
+    print(K)
+    print(K2)
+    print(R)
+    print(t)
     # Compute the essential matrix
-    E = np.dot(K2.T, np.dot(compute_skew_symmetric(t), np.dot(R, K)))
+    E = np.dot(compute_skew_symmetric(t), R)
     
     # Enforce the rank-2 constraint on the essential matrix
     U, S, Vh = np.linalg.svd(E)
@@ -73,7 +78,7 @@ def compute_fundamental_matrix(K, K2, R, t):
     # Compute the fundamental matrix from the essential matrix
     # F = np.dot(np.linalg.pinv(K), np.dot(E, np.linalg.pinv(K.T)))
     F = np.dot(np.linalg.pinv(K2.T), np.dot(E, np.linalg.pinv(K)))
-    # F = E
+    F = E
     
     return F
 
@@ -92,17 +97,18 @@ def drawlines(img1, img2, epiline, pt1, pt2):
     print('##############')
     print(epiline.shape)
     print(epiline)    
-    print(pt1)    
-    print(pt2)    
-    
-    print(pt1.shape)
-    print(pt2.shape)
+
 
     # Compute the line endpoints based on the image dimensions
     # x1, y1 = 0, int(-c / b)
     # x2, y2 = width, int(-(c + a * width) / b)
     x0, y0 = [0, int(-epiline[2] / epiline[1])]
     x1, y1 = [column, int(-(epiline[2] + epiline[0] * column) / epiline[1])] 
+    print("#############")
+    print(x0)
+    print(x1)
+    print(y0)
+    print(y1)
     ##########epipolar line on source image################
     img2 = cv2.line(img2,  
                     (int(x0), int(y0)), (int(x1), int(y1)), color, 1) 
@@ -113,69 +119,68 @@ def drawlines(img1, img2, epiline, pt1, pt2):
                         (int(pt1[0]), int(pt1[1])), 5, color, thickness) 
     img2 = cv2.circle(img2,  
                         (int(pt2[0]), int(pt2[1])), 5, color, thickness) 
-    return img1, img2 
+    return img1, img2
 
-def visualize_epipolar_line(source_img, target_img, intrinsic, R_src_to_target, t_src_to_target, src_pt, alpha=0.5, scale_factor=0.8):
-    """
-    Visualizes the epipolar line corresponding to a source image pixel in the target image.
+# def visualize_epipolar_line(source_img, target_img, intrinsic, R_src_to_target, t_src_to_target, src_pt, alpha=0.5, scale_factor=0.8):
+#     """
+#     Visualizes the epipolar line corresponding to a source image pixel in the target image.
 
-    Args:
-        source_img: Source view image (numpy array).
-        target_img: Target view image (numpy array).
-        intrinsic_src: Camera intrinsic matrix of the source view (3x3 numpy array).
-        R_src_to_target: Rotation matrix from source to target view (3x3 numpy array).
-        t_src_to_target: Translation vector from source to target view (3x1 numpy array).
-        src_pt: Pixel position in the source image (2x1 numpy array).
-        alpha: Transparency value for the epipolar line (0.0 to 1.0).
-        scale_factor: Scale factor for darkening the background image (0.0 to 1.0).
+#     Args:
+#         source_img: Source view image (numpy array).
+#         target_img: Target view image (numpy array).
+#         intrinsic_src: Camera intrinsic matrix of the source view (3x3 numpy array).
+#         R_src_to_target: Rotation matrix from source to target view (3x3 numpy array).
+#         t_src_to_target: Translation vector from source to target view (3x1 numpy array).
+#         src_pt: Pixel position in the source image (2x1 numpy array).
+#         alpha: Transparency value for the epipolar line (0.0 to 1.0).
+#         scale_factor: Scale factor for darkening the background image (0.0 to 1.0).
 
-    Returns:
-        A numpy array representing the combined image with the visualized epipolar line.
-    """
+#     Returns:
+#         A numpy array representing the combined image with the visualized epipolar line.
+#     """
 
-    # Calculate the fundamental matrix
-    #   K_src_inv = np.linalg.inv(intrinsic_src)
-    #   essential_matrix = R_src_to_target.dot(t_src_to_target.T)
-    #   F = K_src_inv.T.dot(essential_matrix).dot(K_src_inv)
-    print('$$$$$$$fundamental$$$$$$$')
-    print(R_src_to_target.shape)
-    F = compute_fundamental_matrix(intrinsic, R_src_to_target, t_src_to_target)
+#     # Calculate the fundamental matrix
+#     #   K_src_inv = np.linalg.inv(intrinsic_src)
+#     #   essential_matrix = R_src_to_target.dot(t_src_to_target.T)
+#     #   F = K_src_inv.T.dot(essential_matrix).dot(K_src_inv)
+#     print(R_src_to_target.shape)
 
-    print(F.shape)
-    # Convert source pixel to homogeneous coordinates
-    src_pt_homog = np.append(src_pt, [1])
+#     F = compute_fundamental_matrix(intrinsic, R_src_to_target, t_src_to_target)
 
-    # Project source pixel to target image plane using epipolar constraint
-    epipolar_line = F.dot(src_pt_homog)
+#     # Convert source pixel to homogeneous coordinates
+#     src_pt_homog = np.append(src_pt, [1])
 
-    # Normalize the epipolar line
-    # epipolar_line /= epipolar_line[2]
-    epipolar_line /= np.linalg.norm(epipolar_line[:2])
-    # Reshape epipolar line for line drawing
-    line = epipolar_line[:2].reshape(1, -1)
+#     # Project source pixel to target image plane using epipolar constraint
+#     epipolar_line = F.dot(src_pt_homog)
 
-    # Get image heights and widths
-    h_target, w_target = target_img.shape[:2]
+#     # Normalize the epipolar line
+#     # epipolar_line /= epipolar_line[2]
+#     epipolar_line /= np.linalg.norm(epipolar_line[:2])
+#     # Reshape epipolar line for line drawing
+#     line = epipolar_line[:2].reshape(1, -1)
 
-    # Clip the epipolar line to image boundaries
-    line = np.clip(line, a_min =0, a_max = np.amax([h_target, w_target]))
+#     # Get image heights and widths
+#     h_target, w_target = target_img.shape[:2]
 
-    # Draw the epipolar line on a copy of the target image
-    target_img_vis = target_img.copy()
-    print(line.shape)
-    # cv2.line(target_img_vis, tuple(line[0]), tuple(line.squeeze()), (0, 255, 0), thickness=2, lineType=cv2.LINE_AA)
+#     # Clip the epipolar line to image boundaries
+#     line = np.clip(line, a_min =0, a_max = np.amax([h_target, w_target]))
 
-    # # Dim the background image
-    # target_img_vis = target_img_vis.astype(np.float32) * scale_factor
+#     # Draw the epipolar line on a copy of the target image
+#     target_img_vis = target_img.copy()
+#     print(line.shape)
+#     # cv2.line(target_img_vis, tuple(line[0]), tuple(line.squeeze()), (0, 255, 0), thickness=2, lineType=cv2.LINE_AA)
 
-    # # Create a mask for the epipolar line with transparency
-    # mask = np.ones_like(target_img_vis) * alpha
-    # cv2.line(mask, tuple(line[0]), tuple(line.squeeze()), (1, 1, 1), thickness=2, lineType=cv2.LINE_AA)
+#     # # Dim the background image
+#     # target_img_vis = target_img_vis.astype(np.float32) * scale_factor
 
-    # # Combine the target image and epipolar line with transparency
-    # vis_img = cv2.addWeighted(target_img_vis, 1 - mask, mask, alpha, 0)
+#     # # Create a mask for the epipolar line with transparency
+#     # mask = np.ones_like(target_img_vis) * alpha
+#     # cv2.line(mask, tuple(line[0]), tuple(line.squeeze()), (1, 1, 1), thickness=2, lineType=cv2.LINE_AA)
 
-    return None  #vis_img.astype(np.uint8)
+#     # # Combine the target image and epipolar line with transparency
+#     # vis_img = cv2.addWeighted(target_img_vis, 1 - mask, mask, alpha, 0)
+
+#     return None  #vis_img.astype(np.uint8)
 
 
 def draw_sift_features_and_epipolar_lines(img1, img2, F):
@@ -199,6 +204,7 @@ def draw_sift_features_and_epipolar_lines(img1, img2, F):
     flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=50))
     matches = flann.knnMatch(des1, des2, k=2)
     print("##########matches found##########")
+    print(img1.shape)
     # print(matches)
     # Filter good matches using ratio test
     good_matches = []
@@ -219,7 +225,9 @@ def draw_sift_features_and_epipolar_lines(img1, img2, F):
             # Get source and target keypoints
             src_pt = src_pts[i][0]
             dst_pt = dst_pts[i][0]
-
+            # # print(src_pt)
+            # src_pt[0] = 0
+            # src_pt[1] = 10
             # Calculate epipolar line using fundamental matrix and source keypoint
             epipolar_line = calculate_epipolar_line(src_pt, F)
 
@@ -230,7 +238,7 @@ def draw_sift_features_and_epipolar_lines(img1, img2, F):
             # Reshape epipolar line for line drawing
             line = epipolar_line[:3].reshape(1, -1)
             print('#######epipolar line#######')
-            print(line.shape)
+            print(line)
             # Get image heights and widths
             h_target, w_target = img2.shape[:2]
 
@@ -321,7 +329,7 @@ if __name__ == "__main__":
     tar_homo_mat = np.vstack((np.hstack((tar_rot_mat, tar_trans[:, None])), [0, 0, 0 ,1]))    
 
 
-    # src_homo_mat = np.array([[0.8850673192958701, 0.1673973226830824, 0.43432008389729243, 0.3589177096482855],
+    # src_homo_mat = np.array([[0.8850673192958701, 0.1673973226830824, 0.43432008389729243, 0.3589177096482855], #####aligned pose
     #         [-0.4608850948147595, 0.44571824240272334, 0.7674109756697478, 0.7506100032463232],
     #         [-0.0651215786061575, -0.8793820788529829, 0.4716415695861629, 1.8568835837010935],
     #         [0.0, 0.0, 0.0, 1.000000119209119]])
@@ -340,17 +348,21 @@ if __name__ == "__main__":
             [0.966491, -0.23377006, -0.106051974, -1.1564484],
             [0.0, 0.0, 0.0, 0.9999995]])
     # relative_homo_mat = np.dot(tar_homo_mat.T, src_homo_mat)
-    relative_homo_mat = np.dot(tar_homo_mat, src_homo_mat.T)
+
+    
+    relative_homo_mat = np.dot(tar_homo_mat, np.linalg.inv(src_homo_mat))
 
     # Example source pixel position
     u = 600
     v = 500
     src_pt = np.array([u, v])
     print("#######relative homo######")
-    # print(relative_homo_mat[:3, 3])
+    print(relative_homo_mat[:3, :3])
     # t_rel = tar_trans - tar_rot_mat @ src_rot_mat.T @ src_trans
 
     F = compute_fundamental_matrix(src_intrinsic, tar_intrinsic, relative_homo_mat[:3, :3], [relative_homo_mat[0,3], relative_homo_mat[1,3], relative_homo_mat[2,3]])
+    print("$$$$$$$$$$fundamental $$$$$$$$$$")
+    print(F)
 
     draw_sift_features_and_epipolar_lines(source_img, target_img, F)
 
