@@ -221,7 +221,7 @@ def draw_sift_features_and_epipolar_lines(img1, img2, F):
 
     # Draw epipolar lines for each source keypoint in the target image
     for i in range(len(good_matches)):
-        if i == 16:          #######match pair 16 is correct################
+        # if i == 16:          #######match pair 16 is correct################
             # Get source and target keypoints
             src_pt = src_pts[i][0]
             dst_pt = dst_pts[i][0]
@@ -346,10 +346,11 @@ if __name__ == "__main__":
     tar_homo_mat = np.array([[0.19473474, 0.39851177, 0.8962516, 1.4587839], ########raw target pose
             [-0.1672538, -0.8868709, 0.43068102, 1.642482],
             [0.966491, -0.23377006, -0.106051974, -1.1564484],
-            [0.0, 0.0, 0.0, 0.9999995]])
+            [0.0, 0.0, 0.0, 0.9999995]]) #######caemra 2 world
     # relative_homo_mat = np.dot(tar_homo_mat.T, src_homo_mat)
 
-    
+    # src_homo_mat = np.linalg.inv(src_homo_mat)      #####world 2 camera
+    # tar_homo_mat = np.linalg.inv(tar_homo_mat)
     relative_homo_mat = np.dot(tar_homo_mat, np.linalg.inv(src_homo_mat))
 
     # Example source pixel position
