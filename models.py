@@ -1118,15 +1118,6 @@ def save_tensor_as_image(tensor, filename):
 #         return output
   
 if __name__ == "__main__":
-    # Download all DiT checkpoints
-
-    # print(feats)
-    # min_val = feats.min().item()
-    # max_val = feats.max().item()
-    # print(min_val)
-    # print(max_val)
-    # Read a PIL image 
-
     # ###############pre processing for dino features ############################
     # image = Image.open(os.path.join(base_dir, folder_type, filename)) 
     
