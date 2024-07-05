@@ -212,24 +212,6 @@ def center_crop_img_and_resize(src_image, image_size):
     cropped_image = cropped_image.permute(0, 2, 3, 1)
     
     return cropped_image
-# def center_crop_img_and_resize(src_image, image_size):
-#     """
-#     Center cropping implementation from ADM.
-#     """
-#     while min(*src_image.size) >= 2 * image_size:
-#         src_image = src_image.resize(
-#             tuple(x // 2 for x in src_image.size), resample=Image.BOX
-#         )
-
-#     scale = image_size / min(*src_image.size)
-#     src_image = src_image.resize(
-#         tuple(round(x * scale) for x in src_image.size), resample=Image.BICUBIC
-#     )
-
-#     arr = np.array(src_image)
-#     crop_y = (arr.shape[0] - image_size) // 2
-#     crop_x = (arr.shape[1] - image_size) // 2
-#     return Image.fromarray(arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size])
 
 def load_resize_image_cv2(image_path):
     # Load image using OpenCV
@@ -275,15 +257,28 @@ if __name__ == "__main__":
 
     filename2 = 'frame_000470.jpg'
     tar_vae_features = 'frame_000470.npy'
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    src_feats = np.load(os.path.join(base_dir, folder_type, src_vae_features))
-    tar_feats = np.load(os.path.join(base_dir, folder_type, tar_vae_features))
+    batch_size = 6
+    src_feats = torch.from_numpy(np.load(os.path.join(base_dir, folder_type, src_vae_features))).to(device)
+    src_feats = src_feats.repeat(batch_size, 1, 1, 1)
+    tar_feats = torch.from_numpy(np.load(os.path.join(base_dir, folder_type, tar_vae_features))).to(device)
+    tar_feats = tar_feats.repeat(batch_size, 1, 1, 1)
+
+    # Define transformation for input images
+    transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.ToTensor()
+    ])
+
+    # repo = 'isl-org/ZoeDepth'
+    # model_zoe_n = torch.hub.load(repo, "ZoeD_N", pretrained=True)
 
     # Load source and target images using OpenCV
     src_image_path = os.path.join(base_dir, folder_type, filename)
     tgt_image_path = os.path.join(base_dir, folder_type, filename2)
-    src_image = load_resize_image_cv2(src_image_path)
-    tgt_image = load_resize_image_cv2(tgt_image_path)
+    src_image = load_resize_image_cv2(src_image_path).repeat(batch_size, 1, 1, 1).to(device)  # Add batch dimension
+    tgt_image = load_resize_image_cv2(tgt_image_path).repeat(batch_size, 1, 1, 1).to(device)  # Add batch dimension
 
     scene_id = '0a5c013435'
     focal_length_x = 1432.3682
@@ -312,24 +307,52 @@ if __name__ == "__main__":
     tar_trans = np.array([0.473911, 1.28311, -1.5215])
 
     # Homogeneous matrices
-    src_homo_mat_sample = np.array([[0.42891303, 0.40586197, 0.8070378, 1.4285464],  # raw source pose
-                                    [-0.06427293, -0.8774122, 0.4754123, 1.6330968],
-                                    [0.9010566, -0.25578123, -0.35024756, -1.2047926],
-                                    [0.0, 0.0, 0.0, 0.99999964]])
+    # src_homo_mat_sample = np.array([[0.42891303, 0.40586197, 0.8070378, 1.4285464], #########aligne pose
+    #                             [-0.06427293, -0.8774122, 0.4754123, 1.6330968],
+    #                             [0.9010566, -0.25578123, -0.35024756, -1.2047926],
+    #                             [0.0, 0.0, 0.0, 0.99999964]])
+    src_homo_mat_sample = np.array([[0.42891303, 0.40586197, 0.8070378, 1.4285464], ###########raw source pose
+            [-0.06427293, -0.8774122, 0.4754123, 1.6330968],
+            [0.9010566, -0.25578123, -0.35024756, -1.2047926],
+            [0.0, 0.0, 0.0, 0.99999964]])
     src_homo_mat_sample = np.linalg.inv(src_homo_mat_sample)
 
-    tar_homo_mat_sample = np.array([[0.19473474, 0.39851177, 0.8962516, 1.4587839],  # raw target pose
-                                    [-0.1672538, -0.8868709, 0.43068102, 1.642482],
-                                    [0.966491, -0.23377006, -0.106051974, -1.1564484],
-                                    [0.0, 0.0, 0.0, 0.9999995]])
+    # tar_homo_mat_sample = np.array([[0.19473474, 0.39851177, 0.8962516, 1.4587839], ############aligned pose
+    #                             [-0.1672538, -0.8868709, 0.43068102, 1.642482],
+    #                             [0.966491, -0.23377006, -0.106051974, -1.1564484],
+    #                             [0.0, 0.0, 0.0, 0.9999995]])
+    tar_homo_mat_sample = np.array([[0.19473474, 0.39851177, 0.8962516, 1.4587839], ########raw target pose
+            [-0.1672538, -0.8868709, 0.43068102, 1.642482],
+            [0.966491, -0.23377006, -0.106051974, -1.1564484],
+            [0.0, 0.0, 0.0, 0.9999995]])
     tar_homo_mat_sample = np.linalg.inv(tar_homo_mat_sample)
 
-    src_rot_mat = quaternion_to_rotation_matrix(src_quatern)
-    tar_rot_mat = quaternion_to_rotation_matrix(tar_quatern)
+    src_homo_mat = torch.tensor([src_homo_mat_sample] * batch_size, dtype=torch.float32, device=device)
+    tar_homo_mat = torch.tensor([tar_homo_mat_sample] * batch_size, dtype=torch.float32, device=device)
 
-    relative_rot_mat = np.dot(tar_rot_mat, src_rot_mat.T)
-    relative_homo_mat = np.dot(tar_homo_mat_sample, np.linalg.inv(src_homo_mat_sample))
+    src_intrinsic = torch.tensor([src_intrinsic] * batch_size, dtype=torch.float32, device=device)
+    tar_intrinsic = torch.tensor([tar_intrinsic] * batch_size, dtype=torch.float32, device=device)
+    src_trans = torch.tensor([src_trans] * batch_size, dtype=torch.float32, device=device).view(-1, 3, 1)
+    tar_trans = torch.tensor([tar_trans] * batch_size, dtype=torch.float32, device=device).view(-1, 3, 1)
+    src_quaterns = torch.tensor([src_quatern] * batch_size, dtype=torch.float32, device=device)
+    tar_quaterns = torch.tensor([tar_quatern] * batch_size, dtype=torch.float32, device=device)
+    print("###########!!!!!!!!!!!!!!!!!!!###############")
+    print(src_trans.shape)
+    print(tar_trans.shape)
+    print(src_homo_mat.shape)
+    # Compute rotation matrices from quaternions
+    # src_rot_mat = torch.linalg.inv(quaternion_to_rotation_matrix(src_quaterns)).to(device)
+    # tar_rot_mat = torch.linalg.inv(quaternion_to_rotation_matrix(tar_quaterns)).to(device)
+    src_rot_mat = quaternion_to_rotation_matrix(src_quaterns).to(device)
+    tar_rot_mat = quaternion_to_rotation_matrix(tar_quaterns).to(device)
+    # Compute relative rotation matrix
+    relative_rot_mat = torch.bmm(tar_rot_mat, src_rot_mat.transpose(1, 2))
+    # Compute relative homogeneous matrix
+    relative_homo_mat = torch.bmm(tar_homo_mat, torch.linalg.inv(src_homo_mat))
+    # relative_homo_mat = torch.matmul(tar_homo_mat, torch.inverse(src_homo_mat))
 
+    _, channels, H, W = src_image.shape
+    # Load the depth map image using OpenCV
     depth_file = 'depth_frame_000440.png'  # Replace with your depth map image path
     depth_map = cv2.imread(os.path.join(base_dir, folder_type, depth_file), cv2.IMREAD_UNCHANGED)
 
@@ -346,22 +369,63 @@ if __name__ == "__main__":
 
     # Normalize from millimeters to meters
     depth_map_float /= 1000.0
-    depth_map_float = cv2.resize(depth_map_float, (src_image.shape[2], src_image.shape[1]), interpolation=cv2.INTER_CUBIC)
+    depth_map_float = cv2.resize(depth_map_float, (W, H), interpolation=cv2.INTER_CUBIC)  ### cv2.INTER_LINEAR
 
+
+    # Convert to PyTorch tensor
+    depth_map_tensor = torch.from_numpy(depth_map_float).to(device)
+    depth_map_tensor = depth_map_tensor.repeat(batch_size, 1, 1)
+    factor1 = H / depth_map_tensor.shape[1]
+    factor2 = W / depth_map_tensor.shape[2]
+    assert factor1 == factor2, f"Factors are not equal: factor1 = {factor1}, factor2 = {factor2}"
+    factor = factor2
+    # Calculate the new height and width for downsampling
+    new_H = int(H / factor)
+    new_W = int(W / factor)
+
+    # Downsample the image
+    # print(src_image[0].cpu().numpy())
+
+    # downsampled_image = F.interpolate(src_image, size=(new_H, new_W), mode='bilinear', align_corners=False)
+    # downsampled_image_cv = downsampled_image.permute(0, 2, 3, 1)
+    # print(downsampled_image_cv.shape)
+    # cv2.imwrite('scaled-img.png', downsampled_image_cv[0].to(torch.uint8).cpu().numpy())
+
+    print("########depth tensor#########")
+    print(factor)
+    print(src_image.shape)
+    # print(downsampled_image.shape)
+    print(depth_map_tensor.shape)
+    # # Invert the intrinsic matrices
+    # K_inv = torch.inverse(K
     # Convert depth map to 3D points with RGB colors in source camera frame
-    points_3D, colors = depth_to_3d_points_with_colors(depth_map_float, src_intrinsic, src_image)
-
+    points_with_colors = depth_to_3d_points_with_colors(depth_map_tensor, src_intrinsic, src_image) ######## /factor
+    print(points_with_colors.shape)
+    
     # Transform points with colors to target camera frame
-    transformed_points = transform_points_with_colors(points_3D, relative_rot_mat, relative_homo_mat[:3, 3])
-
+    transformed_with_colors = transform_points_with_colors(points_with_colors, relative_homo_mat[:, :3, :3], relative_homo_mat[:, :3, 3])
+    
     # Project transformed 3D points with colors onto the target camera image plane
-    projected_points_2D = project_points_with_colors(transformed_points, tar_intrinsic)
-
+    projected_points_2D, colors = project_points_with_colors(transformed_with_colors, tar_intrinsic)  ########## /factor
+    print(projected_points_2D.shape)
+    print(colors.shape)
+    # print((projected_points_2D >= 0).all(dim=-1).all())
+    warped_images = populate_image_with_colors(projected_points_2D, colors)    
     # Warp the source image to the target view
-    warped_image = populate_image_with_colors(projected_points_2D, colors, (src_image.shape[1], src_image.shape[2]))
+    binary_masks = (warped_images[:, :, :, 0] != 0) & (warped_images[:, :, :, 1] != 0) & (warped_images[:, :, :, 2] != 0)
+    binary_masks = binary_masks.unsqueeze(3).to(torch.bool).float()*255
 
-    # Save the warped image
+    # Display the warped image (convert to numpy for visualization)
+    warped_image = warped_images[0].cpu().numpy()
+    mask_np = binary_masks[0, :, :, 0].byte().cpu().numpy()
+    invert_mask = cv2.bitwise_not(mask_np)
+
+    print(warped_image.shape)
+    # Assuming 'warped_image' is a PyTorch tensor
+
+    # print(warped_image)
     cv2.imwrite('Warped-img.png', warped_image)
+    # cv2.imwrite('binary-mask.png', invert_mask)
     # # Example source pixel position
     # u = 600
     # v = 500

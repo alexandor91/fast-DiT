@@ -116,42 +116,6 @@ def project_points_with_colors(points_with_colors, intrinsic_matrix):
     return points_2d_with_colors
 
 
-def warp_image(src_image, tgt_points):
-    C, H, W = src_image.shape
-    tgt_points = tgt_points.reshape(H, W, 2)  # Shape: (H, W, 2)
-    
-    tgt_points[..., 0] = (2.0 * tgt_points[..., 0] / (W - 1)) - 1.0
-    tgt_points[..., 1] = (2.0 * tgt_points[..., 1] / (H - 1)) - 1.0
-
-    # Use OpenCV to warp the image
-    src_image = src_image.transpose(1, 2, 0)  # Convert to (H, W, C)
-    map_x, map_y = tgt_points[..., 0], tgt_points[..., 1]
-    map_x = (map_x + 1) * (W - 1) / 2
-    map_y = (map_y + 1) * (H - 1) / 2
-
-    warped_image = cv2.remap(src_image, map_x.astype(np.float32), map_y.astype(np.float32), interpolation=cv2.INTER_LINEAR)
-    return warped_image.transpose(2, 0, 1)  # Convert back to (C, H, W)
-
-def center_crop_img_and_resize(src_image, image_size):
-    """
-    Center cropping implementation from ADM.
-    """
-    while min(*src_image.size) >= 2 * image_size:
-        src_image = src_image.resize(
-            tuple(x // 2 for x in src_image.size), resample=Image.BOX
-        )
-
-    scale = image_size / min(*src_image.size)
-    src_image = src_image.resize(
-        tuple(round(x * scale) for x in src_image.size), resample=Image.BICUBIC
-    )
-
-    arr = np.array(src_image)
-    crop_y = (arr.shape[0] - image_size) // 2
-    crop_x = (arr.shape[1] - image_size) // 2
-    return Image.fromarray(arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size])
-
-
 def populate_image_with_colors(projected_points_2D_colors, H, W):
     image_height = H
     image_width = W
@@ -185,24 +149,42 @@ def populate_image_with_colors(projected_points_2D_colors, H, W):
 
     return image
 
+def warp_image(src_image, tgt_points):
+    C, H, W = src_image.shape
+    tgt_points = tgt_points.reshape(H, W, 2)  # Shape: (H, W, 2)
+    
+    tgt_points[..., 0] = (2.0 * tgt_points[..., 0] / (W - 1)) - 1.0
+    tgt_points[..., 1] = (2.0 * tgt_points[..., 1] / (H - 1)) - 1.0
+
+    # Use OpenCV to warp the image
+    src_image = src_image.transpose(1, 2, 0)  # Convert to (H, W, C)
+    map_x, map_y = tgt_points[..., 0], tgt_points[..., 1]
+    map_x = (map_x + 1) * (W - 1) / 2
+    map_y = (map_y + 1) * (H - 1) / 2
+
+    warped_image = cv2.remap(src_image, map_x.astype(np.float32), map_y.astype(np.float32), interpolation=cv2.INTER_LINEAR)
+    return warped_image.transpose(2, 0, 1)  # Convert back to (C, H, W)
+
 def center_crop_img_and_resize(src_image, image_size):
     """
-    Center cropping implementation from ADM.
+    Center cropping implementation from ADM, modified to work with OpenCV images.
     """
-    while min(src_image.shape) >= 2 * image_size:
-        src_image = src_image.resize(
-            tuple(x // 2 for x in src_image.shape), resample=Image.BOX
-        )
+    while min(src_image.shape[:2]) >= 2 * image_size:
+        new_size = (src_image.shape[1] // 2, src_image.shape[0] // 2)
+        src_image = cv2.resize(src_image, new_size, interpolation=cv2.INTER_AREA)
 
-    scale = image_size / min(src_image.shape)
-    src_image = src_image.resize(
-        tuple(round(x * scale) for x in src_image.shape), resample=Image.BICUBIC
-    )
+    scale = image_size / min(src_image.shape[:2])
+    print("here is scale!!!!")
+    print(scale)
+    new_size = (round(src_image.shape[1] * scale), round(src_image.shape[0] * scale))
+    src_image = cv2.resize(src_image, new_size, interpolation=cv2.INTER_CUBIC)
 
-    arr = np.array(src_image)
-    crop_y = (arr.shape[0] - image_size) // 2
-    crop_x = (arr.shape[1] - image_size) // 2
-    return Image.fromarray(arr[crop_y: crop_y + image_size, crop_x: crop_x + image_size])
+    crop_y = (src_image.shape[0] - image_size) // 2
+    crop_x = (src_image.shape[1] - image_size) // 2
+    cropped_image = src_image[crop_y:crop_y + image_size, crop_x:crop_x + image_size]
+
+    print(cropped_image.shape)
+    return cropped_image
 
 def load_resize_image_cv2(image_path):
     # Load image using OpenCV
@@ -239,6 +221,36 @@ def calculate_valid_pixel_ratio(binary_masks):
 def save_depth_map(depth_map, save_path):
     depth_map = np.squeeze(depth_map)
     plt.imsave(save_path, depth_map, cmap='inferno')
+def project_and_save_tsne_image(src_features, output_path='tsne_src_viz.png'):
+    """
+    Projects the input features from 4 dimensions to 3 dimensions using t-SNE and saves it as an image.
+    
+    Args:
+    - src_features (numpy array): The input array with shape (1, 4, 32, 32).
+    - output_path (str): The path where the output image will be saved.
+    """
+    # Remove the batch dimension
+    if src_features.ndim == 4:
+       src_features = src_features[0]  # Shape: (4, 32, 32)
+
+    # Reshape to (4, 1024)
+    H, W = src_features.shape[1], src_features.shape[2]
+    src_features_reshaped = src_features.reshape(4, -1).T  # Shape: (1024, 4)
+
+    # Perform t-SNE to reduce to 3 dimensions
+    tsne = TSNE(n_components=3, perplexity=30, random_state=42)
+    tsne_result = tsne.fit_transform(src_features_reshaped)  # Shape: (1024, 3)
+
+    # Reshape back to image format (32, 32, 3)
+    tsne_image = tsne_result.reshape(H, W, 3)
+
+    # Normalize to range [0, 255]
+    tsne_image = (tsne_image - tsne_image.min()) / (tsne_image.max() - tsne_image.min()) * 255
+    tsne_image = tsne_image.astype(np.uint8)
+
+    # Save the image using OpenCV
+    cv2.imwrite(output_path, tsne_image)
+    return tsne_image
 
 if __name__ == "__main__":
     # Download all DiT checkpoints
@@ -255,18 +267,21 @@ if __name__ == "__main__":
     filename2 = '87654233.png'
     tar_vae_features = 'frame_000470.npy'
 
-    # src_feats = np.load(os.path.join(base_dir, folder_type, src_vae_features))
-    # tar_feats = np.load(os.path.join(base_dir, folder_type, tar_vae_features))
+    ###########load VAE numpy features################
+    src_feats = np.load(os.path.join(base_dir, folder_type, src_vae_features))
+    tar_feats = np.load(os.path.join(base_dir, folder_type, tar_vae_features))
 
     src_image_path = os.path.join(base_dir, folder_type, filename)
     tgt_image_path = os.path.join(base_dir, folder_type, filename2)
     src_image = load_resize_image_cv2(src_image_path)
     tgt_image = load_resize_image_cv2(tgt_image_path)
-    depth_file = 'depth_frame_000440.png'  # Replace with your depth map image path
+
     depth_file = '86352933_depth.npy'
     folder_type = 'fast-DiT/data/real-estate/depth'
     # depth_map = cv2.imread(os.path.join(base_dir, folder_type, depth_file), cv2.IMREAD_UNCHANGED)   
-    depth_map = np.load(os.path.join(base_dir, folder_type, depth_file))   
+    depth_map = np.load(os.path.join(base_dir, folder_type, depth_file), cv2.IMREAD_UNCHANGED)   
+    depth_map = center_crop_img_and_resize(depth_map, 256)
+
     print(depth_map.shape)
     if depth_map is None:
         raise ValueError(f"Failed to load depth map from {depth_file}")
@@ -295,14 +310,27 @@ if __name__ == "__main__":
             src_intrinsic = np.array(entry['intrinsics'])
             src_intrinsic[0, :] = src_intrinsic[0, :] * src_image.shape[1] 
             src_intrinsic[1, :] = src_intrinsic[1, :] * src_image.shape[0] 
+            scale1 = 32/min(src_image.shape[:2]) #########final feature map size is 32
+            scale2 = 32/(min(src_image.shape[:2]) * (src_intrinsic[1, 1]/src_intrinsic[0, 0]))
+            src_intrinsic[0, 0] = src_intrinsic[0, 0] * scale1
+            src_intrinsic[1, 1] = src_intrinsic[1, 1] * scale2
+            src_intrinsic[0, 2] = 128 /8 #954.7021
+            src_intrinsic[1, 2] = 128 /8 #723.6698
+            #########downsampling to 32 x 32 feature map
             break
 
     for entry in data:
         if entry['timestamp'] == tar_timestamp:
             tar_homo_mat_sample = np.array(entry['pose'])
             tar_intrinsic = np.array(entry['intrinsics'])
-            tar_intrinsic[0, :] = tar_intrinsic[0, :] * src_image.shape[1] 
-            tar_intrinsic[1, :] = tar_intrinsic[1, :] * src_image.shape[0] 
+            tar_intrinsic[0, :] = tar_intrinsic[0, :] * tgt_image.shape[1] 
+            tar_intrinsic[1, :] = tar_intrinsic[1, :] * tgt_image.shape[0] 
+            scale1 = 32/min(tgt_image.shape[:2]) #########final feature map size is 32
+            scale2 = 32/(min(tgt_image.shape[:2]) * (tar_intrinsic[1, 1]/tar_intrinsic[0, 0]))
+            tar_intrinsic[0, 0] = tar_intrinsic[0, 0] * scale1
+            tar_intrinsic[1, 1] = tar_intrinsic[1, 1] * scale2
+            tar_intrinsic[0, 2] = 128 /8 #954.7021
+            tar_intrinsic[1, 2] = 128 /8 #723.6698
             break
     src_homo_mat_sample = np.linalg.inv(src_homo_mat_sample)
     tar_homo_mat_sample = np.linalg.inv(tar_homo_mat_sample)
@@ -337,26 +365,28 @@ if __name__ == "__main__":
     # depth_map_float /= 255.0
 
 
-    H, W, C = src_image.shape
-    factor1 = H / depth_map_float.shape[0]
-    factor2 = W / depth_map_float.shape[1]
-    assert factor1 == factor2, f"Factors are not equal: factor1 = {factor1}, factor2 = {factor2}"
-    factor = factor2
+    _, C, H, W = src_feats.shape
+    factor = H / depth_map_float.shape[0]
+    # factor2 = W / depth_map_float.shape[1]
+    # assert factor1 == factor2, f"Factors are not equal: factor1 = {factor1}, factor2 = {factor2}"
+    # factor = factor2
     new_H = int(H / factor)
     new_W = int(W / factor)
 
     # downsampled_image = cv2.resize(np.transpose(src_image, (1, 2, 0)), (new_W, new_H))
-    # depth_map_float = cv2.resize(depth_map_float, (W, H), interpolation=cv2.INTER_CUBIC)  ### cv2.INTER_LINEAR
-    downsampled_image = np.transpose(src_image, (2, 0, 1))
+    depth_map_float = cv2.resize(depth_map_float, (W, H), interpolation=cv2.INTER_CUBIC)  ### cv2.INTER_LINEAR
+    src_feats = src_feats[0]
+    tar_feats = tar_feats[0]    
+    downsampled_image = np.transpose(src_feats, (2, 0, 1))
 
     points_3D, colors = depth_to_3d_points_with_colors(depth_map_float, src_intrinsic, downsampled_image)
     print("###colors shape#####")
     print(colors.shape)
     # Transform points with colors to target camera frame
-    transformed_points = transform_points_with_colors(points_3D, relative_homo_mat[:3, :3], relative_homo_mat[:3, 3])
+    transformed_with_colors = transform_points_with_colors(points_3D, colors, relative_homo_mat[:3, :3], relative_homo_mat[:3, 3])
 
     # Ensure the points and colors arrays have compatible shapes before concatenation
-    transformed_with_colors = np.concatenate((transformed_points, colors), axis=1)
+    # transformed_with_colors = np.concatenate((transformed_points, colors), axis=1)
     print(transformed_with_colors.shape)
 
     # Project transformed 3D points with colors onto the target camera image plane
@@ -364,7 +394,6 @@ if __name__ == "__main__":
 
     # Warp the source image to the target view
     warped_image = populate_image_with_colors(projected_points_2D_colors, H, W)
-
-    print(warped_image)
-    # Save the warped image
-    cv2.imwrite('Warped-img.png', warped_image)
+    warped_image = warped_image.transpose(2, 0, 1)
+    print(warped_image.shape)
+    project_and_save_tsne_image(warped_image, 'tsne_warped_viz.png')
