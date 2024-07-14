@@ -14,6 +14,28 @@ import json
 # Load the LPIPS model
 lpips_model = lpips.LPIPS(net='alex')
 
+
+def center_crop_img_and_resize(src_image, image_size):
+    """
+    Center cropping implementation from ADM, modified to work with OpenCV images.
+    """
+    while min(src_image.shape[:2]) >= 2 * image_size:
+        new_size = (src_image.shape[1] // 2, src_image.shape[0] // 2)
+        src_image = cv2.resize(src_image, new_size, interpolation=cv2.INTER_AREA)
+
+    scale = image_size / min(src_image.shape[:2])
+    print("here is scale!!!!")
+    print(scale)
+    new_size = (round(src_image.shape[1] * scale), round(src_image.shape[0] * scale))
+    src_image = cv2.resize(src_image, new_size, interpolation=cv2.INTER_CUBIC)
+
+    crop_y = (src_image.shape[0] - image_size) // 2
+    crop_x = (src_image.shape[1] - image_size) // 2
+    cropped_image = src_image[crop_y:crop_y + image_size, crop_x:crop_x + image_size]
+
+    print(cropped_image.shape)
+    return cropped_image
+
 # Helper functions
 def load_image(file_path):
     image = cv2.imread(file_path)
@@ -171,8 +193,8 @@ def compute_tsed(img1, img2, pose1, pose2, src_intrinsics, tar_intrinsics, thres
     count = np.sum(below_threshold)
 
     n_matches = len(seds)
-    print("########total matches is !!!!!!")
-    print(n_matches)
+    # print("########total matches is !!!!!!")
+    # print(n_matches)
 
     median_sed = np.median(seds_array) if n_matches > 0 else 1e8
     
@@ -200,7 +222,7 @@ def tsed_evaluate(generated_dir, poses, intrinsics):
         tsed_scores.append((count1, media_dist1))
     
     avg_tsed_count = np.mean([score[0] for score in tsed_scores])
-    avg_tsed_dis = np.mean([score[0] for score in tsed_scores])
+    avg_tsed_dis = np.mean([score[1] for score in tsed_scores])
 
     # avg_tsed_gt = np.mean([score[1] for score in tsed_scores])
     
@@ -226,7 +248,6 @@ def evaluate(generated_dir, ground_truth_dir):
     
     real_features = []
     generated_features = []
-    fid_scores = []
     all_kid_values = []
 
     for gen_file, gt_file in tqdm(zip(generated_files, ground_truth_files), total=len(generated_files)):
@@ -251,10 +272,6 @@ def evaluate(generated_dir, ground_truth_dir):
         # fid_score = compute_fid(real_features, generated_features)
         kid_value = compute_kid(real_feature, gen_feature)
         ###########
-        # print("####COMPUTED SCORES OF EACH ITERATION")
-        # print(lpips_score)
-        # print(psnr_score)
-        # print(ssim_score)
         # Compute TSED if necessary
         # tsed_score = compute_tsed(gen_image.numpy(), gt_image.numpy())
         
@@ -286,18 +303,17 @@ def evaluate(generated_dir, ground_truth_dir):
 if __name__ == "__main__":
     base_dir = '/home/student.unimelb.edu.au/xueyangk'
     folder_type = 'fast-DiT/data/real-estate/rgb'
-    img_folder_type = 'rgb'
+    gt_folder_type = 'fast-DiT/data/real-estate/rgb'
     # filename = 'frame_000440.jpg'
     generated_dir = os.path.join(base_dir, folder_type)
-    ground_truth_dir = os.path.join(base_dir, folder_type)
+    ground_truth_dir = os.path.join(base_dir, gt_folder_type)
+    ###########Json file for pose and intrinsics############
     json_file = 'fast-DiT/data/real-estate/output.json'
     with open(os.path.join(base_dir, json_file), 'r') as file:
         data = json.load(file)
     sorted_data = sorted(data, key=lambda x: x['timestamp'])
     # Create a dictionary for quick lookup
     data_dict = {entry['timestamp']: entry for entry in data}
-
-
     # Iterate through the data to find the specific timestamp
     generated_img_files = sorted(os.listdir(generated_dir))
     # Initialize variables for pose and intrinsics
@@ -306,7 +322,7 @@ if __name__ == "__main__":
     intrinsics = [] #np.zeros((n, 3, 3))
     W = 640    ##real estatte dataset size
     H = 360    ##real estatte dataset size
-    for image_file in generated_img_files:
+    for image_file in generated_img_files:     ###########generated imaGE IN 256
         # Extract timestamp from filename
         filename = os.path.basename(image_file)
         file_timestamp = int(os.path.splitext(filename)[0])  # Assuming filename is just the timestamp
@@ -318,6 +334,7 @@ if __name__ == "__main__":
             poses.append(pose)
             # Load and transform intrinsics
             intrinsic = np.array(entry['intrinsics'])
+            ############## uncomment following converting for real-estate dataset intrinsics
             intrinsic[0, :] = intrinsic[0, :] * W 
             intrinsic[1, :] = intrinsic[1, :] * H    
             
@@ -328,8 +345,29 @@ if __name__ == "__main__":
             intrinsic[1, 1] = intrinsic[1, 1] * scale2
             intrinsic[0, 2] = 128
             intrinsic[1, 2] = 128 
+            ################ uncomment following converting for scannet and scannetv2 dataset intrinsics 
+            # scale1 = 256/min(H, W) #########final feature map size is 32
+            # scale2 = 256/(min(H, W) * (intrinsic[1, 1]/intrinsic[0, 0]))
+            # intrinsic[0, 0] = intrinsic[0, 0] * scale1
+            # intrinsic[1, 1] = intrinsic[1, 1] * scale2
+            # intrinsic[0, 2] = 128 #954.7021
+            # intrinsic[1, 2] = 128 #723.6698
+
             intrinsics.append(intrinsic)
 
+    ############scale and crop the gt folder from the original size to 256, same size of our generated image size############
+    gt_img_files = sorted(os.listdir(ground_truth_dir))
+    output_folder_type = "fast-DiT/data/real-estate/cropped-gt"
+    for gt_image in gt_img_files:     ###########GT IN 256
+        print("######gt image########")
+        print(gt_image)
+        gt_img = cv2.imread(os.path.join(base_dir, gt_folder_type, gt_image))
+        gt_cropped_img = center_crop_img_and_resize(gt_img, 256)
+        filename = os.path.basename(image_file)
+        print(filename)
+        ### file_timestamp = int(os.path.splitext(filename)[0])
+        cv2.imwrite(os.path.join(base_dir, output_folder_type, filename), gt_cropped_img)
+    cropped_ground_truth_dir = os.path.join(base_dir, output_folder_type)
 
-    # evaluate(generated_dir, ground_truth_dir)
-    tsed_evaluate(generated_dir, poses, intrinsics)
+    evaluate(generated_dir, cropped_ground_truth_dir)      ######First 5 metric results on poxels of generated vs GT images########
+    tsed_evaluate(generated_dir, poses, intrinsics)     ##### Pixel consistency
