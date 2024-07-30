@@ -267,85 +267,158 @@ if __name__ == "__main__":
     filename2 = '87654233.png'
     tar_vae_features = 'frame_000470.npy'
 
-    ###########load VAE numpy features################
-    src_feats = np.load(os.path.join(base_dir, folder_type, src_vae_features))
-    tar_feats = np.load(os.path.join(base_dir, folder_type, tar_vae_features))
+    folder_type = 'fast-DiT/data/realestate/1'
+    file_type = 'rgb'
 
-    src_image_path = os.path.join(base_dir, folder_type, filename)
-    tgt_image_path = os.path.join(base_dir, folder_type, filename2)
-    src_image = load_resize_image_cv2(src_image_path)
-    tgt_image = load_resize_image_cv2(tgt_image_path)
-
-    depth_file = '86352933_depth.npy'
-    folder_type = 'fast-DiT/data/real-estate/depth'
-    # depth_map = cv2.imread(os.path.join(base_dir, folder_type, depth_file), cv2.IMREAD_UNCHANGED)   
-    depth_map = np.load(os.path.join(base_dir, folder_type, depth_file), cv2.IMREAD_UNCHANGED)   
-    depth_map = center_crop_img_and_resize(depth_map, 256)
-
-    print(depth_map.shape)
-    if depth_map is None:
-        raise ValueError(f"Failed to load depth map from {depth_file}")
-
-    # if depth_map.dtype != np.uint16 or depth_map.dtype != np.uint8:
-    #     raise ValueError("Depth map is not in uint16 format")
-
-    depth_map_float = depth_map.astype(np.float32)
     # Load the JSON file
-    json_file = 'fast-DiT/data/real-estate/output.json'
-    with open(os.path.join(base_dir, json_file), 'r') as file:
+    json_file = 'pose.json'
+    with open(os.path.join(base_dir, folder_type, json_file), 'r') as file:
+        # file = os.path.join(base_dir, folder_type, json_file)
         data = json.load(file)
+    # print(data)
+    filenames = []
 
-    # Define the target timestamp
-    src_timestamp = 86352933 # Example timestamp, replace with the desired one
-    tar_timestamp = 87654233
-    # Initialize variables for pose and intrinsics
+    # Iterate over files in the directory
+    for filename in os.listdir(os.path.join(base_dir, folder_type, file_type)):
+        if filename.endswith('.png'):
+            filenames.append(filename)
+    
+    # Sort filenames (assuming they are timestamps)
+    filenames.sort()
+    print(filenames)
+
     src_intrinsic = None
     tar_intrinsic = None
     src_homo_mat_sample = None
     tar_homo_mat_sample = None
+
+    # src_feats_path = os.path.join(base_dir, folder_type, f'{frame_id}.npy')
+    # src_feats = np.load(src_feats_path)
+    # ###########load VAE numpy features################
+    # src_feats = np.load(os.path.join(base_dir, folder_type, src_vae_features))
+    # tar_feats = np.load(os.path.join(base_dir, folder_type, tar_vae_features))
+    src_image_path = os.path.join(base_dir, folder_type, file_type, filenames[0])
+    src_image = load_resize_image_cv2(src_image_path)    
+    # src_image = center_crop_img_and_resize(src_image)
+    src_frame_id = str(filenames[0].split('.')[0])
+    print(src_frame_id)
+
     # Iterate through the data to find the specific timestamp
     for entry in data:
-        if entry['timestamp'] == src_timestamp:
+        # print("#####found $$$$$$$##########")
+        timestamp = entry['timestamp']
+        #     pose = entry['pose']
+        if timestamp == str(src_frame_id):
+            print("#####found $$$$$$$##########")
             src_homo_mat_sample = np.array(entry['pose'])
             src_intrinsic = np.array(entry['intrinsics'])
             src_intrinsic[0, :] = src_intrinsic[0, :] * src_image.shape[1] 
             src_intrinsic[1, :] = src_intrinsic[1, :] * src_image.shape[0] 
-            scale1 = 32/min(src_image.shape[:2]) #########final feature map size is 32
-            scale2 = 32/(min(src_image.shape[:2]) * (src_intrinsic[1, 1]/src_intrinsic[0, 0]))
+            scale1 = 256/min(src_image.shape[:2]) #########final feature map size is 32
+            scale2 = 256/(min(src_image.shape[:2]) * (src_intrinsic[1, 1]/src_intrinsic[0, 0]))
             src_intrinsic[0, 0] = src_intrinsic[0, 0] * scale1
             src_intrinsic[1, 1] = src_intrinsic[1, 1] * scale2
-            src_intrinsic[0, 2] = 128 /8 #954.7021
-            src_intrinsic[1, 2] = 128 /8 #723.6698
+            src_intrinsic[0, 2] = 128  #954.7021
+            src_intrinsic[1, 2] = 128  #723.6698
             #########downsampling to 32 x 32 feature map
             break
+    
+    print("#####1 $$$$$$$##########")
+    print(src_homo_mat_sample)
+    for filename in filenames:          
+        if filename.endswith('.png'):
+            frame_id = filename.split('.')[0]
+        if frame_id == src_frame_id:
+            continue
+        for entry in data:
+            if entry['timestamp'] == frame_id:
+                tar_homo_mat_sample = np.array(entry['pose'])
+                tar_intrinsic = np.array(entry['intrinsics'])
+                tar_intrinsic[0, :] = tar_intrinsic[0, :] * tgt_image.shape[1] 
+                tar_intrinsic[1, :] = tar_intrinsic[1, :] * tgt_image.shape[0] 
+                scale1 = 256/min(tgt_image.shape[:2]) #########final feature map size is 32
+                scale2 = 256/(min(tgt_image.shape[:2]) * (tar_intrinsic[1, 1]/tar_intrinsic[0, 0]))
+                tar_intrinsic[0, 0] = tar_intrinsic[0, 0] * scale1
+                tar_intrinsic[1, 1] = tar_intrinsic[1, 1] * scale2
+                tar_intrinsic[0, 2] = 128    #954.7021
+                tar_intrinsic[1, 2] = 128    #723.6698
+                break
+        
+        print("#####1 $$$$$$$##########")
+        print(tar_homo_mat_sample)
+        tgt_image_path = os.path.join(base_dir, folder_type, file_type, filename)
+        tgt_image = load_resize_image_cv2(tgt_image_path)
+        # tgt_image = center_crop_img_and_resize(tgt_image)
 
-    for entry in data:
-        if entry['timestamp'] == tar_timestamp:
-            tar_homo_mat_sample = np.array(entry['pose'])
-            tar_intrinsic = np.array(entry['intrinsics'])
-            tar_intrinsic[0, :] = tar_intrinsic[0, :] * tgt_image.shape[1] 
-            tar_intrinsic[1, :] = tar_intrinsic[1, :] * tgt_image.shape[0] 
-            scale1 = 32/min(tgt_image.shape[:2]) #########final feature map size is 32
-            scale2 = 32/(min(tgt_image.shape[:2]) * (tar_intrinsic[1, 1]/tar_intrinsic[0, 0]))
-            tar_intrinsic[0, 0] = tar_intrinsic[0, 0] * scale1
-            tar_intrinsic[1, 1] = tar_intrinsic[1, 1] * scale2
-            tar_intrinsic[0, 2] = 128 /8 #954.7021
-            tar_intrinsic[1, 2] = 128 /8 #723.6698
-            break
+
+        # Define the target timestamp
+        # src_timestamp = 86352933 # Example timestamp, replace with the desired one
+        # tar_timestamp = 87654233
+        # Initialize variables for pose and intrinsics
+
+        # depth_file = '86352933_depth.npy'
+        # folder_type = 'fast-DiT/data/real-estate/depth'
+        # depth_map = cv2.imread(os.path.join(base_dir, folder_type, depth_file), cv2.IMREAD_UNCHANGED)   
+        file_type = 'depth'
+        print("########$$$$$$$$$$$$$##########")
+        print(os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.npy'))
+        # Load corresponding depth map
+        frame_id = filename.split('.')[0]
+        depth_map_path = os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.npy')
+        depth_map = np.load(depth_map_path)[0]
+        # depth_map = center_crop_img_and_resize(depth_map, 256)
+
+        print(depth_map.shape)
+        if depth_map is None:
+            raise ValueError(f"Failed to load depth map")
+
+        # if depth_map.dtype != np.uint16 or depth_map.dtype != np.uint8:
+        #     raise ValueError("Depth map is not in uint16 format")
+        depth_map_float = depth_map.astype(np.float32)
 
 
-    # Check if matrices were found
-    if src_homo_mat_sample is not None and src_intrinsic is not None:
-        print("Pose Matrix:")
-        print(src_homo_mat_sample)
-        print("\nIntrinsics Matrix:")
-        print(src_intrinsic)
-    else:
-        print(f"No data found for timestamp {src_timestamp}")
+        # Check if matrices were found
+        if src_homo_mat_sample is not None and src_intrinsic is not None:
+            print("Pose Matrix:")
+            print(src_homo_mat_sample)
+            print("\nIntrinsics Matrix:")
+            print(src_intrinsic)
 
-    relative_homo_mat = np.dot(tar_homo_mat_sample, np.linalg.inv(src_homo_mat_sample))
+        relative_homo_mat = np.dot(tar_homo_mat_sample, np.linalg.inv(src_homo_mat_sample))
 
+        # _, C, H, W = src_feats.shape
+        H, W, C = src_image.shape
+        factor = H / depth_map_float.shape[0]
+        # factor2 = W / depth_map_float.shape[1]
+        # assert factor1 == factor2, f"Factors are not equal: factor1 = {factor1}, factor2 = {factor2}"
+        # factor = factor2
+        # new_H = int(H / factor)
+        # new_W = int(W / factor)
 
+        # downsampled_image = cv2.resize(np.transpose(src_image, (1, 2, 0)), (new_W, new_H))
+        depth_map_float = cv2.resize(depth_map_float, (W, H), interpolation=cv2.INTER_CUBIC)  ### cv2.INTER_LINEAR
+        src_feats = src_feats[0]
+        tar_feats = tar_feats[0]    
+        downsampled_image = np.transpose(src_feats, (2, 0, 1))
+
+        points_3D, colors = depth_to_3d_points_with_colors(depth_map_float, src_intrinsic, downsampled_image)
+        print("###colors shape#####")
+        print(colors.shape)
+        # Transform points with colors to target camera frame
+        transformed_with_colors = transform_points_with_colors(points_3D, colors, relative_homo_mat[:3, :3], relative_homo_mat[:3, 3])
+
+        # Ensure the points and colors arrays have compatible shapes before concatenation
+        # transformed_with_colors = np.concatenate((transformed_points, colors), axis=1)
+        print(transformed_with_colors.shape)
+
+        # Project transformed 3D points with colors onto the target camera image plane
+        projected_points_2D_colors = project_points_with_colors(transformed_with_colors, tar_intrinsic)
+
+        # Warp the source image to the target view
+        warped_image = populate_image_with_colors(projected_points_2D_colors, H, W)
+        warped_image = warped_image.transpose(2, 0, 1)
+        print(warped_image.shape)
+        # project_and_save_tsne_image(warped_image, 'tsne_warped_viz.png')
 
     # fig, ax = plt.subplots()
 
@@ -359,37 +432,3 @@ if __name__ == "__main__":
 
 
     # depth_map_float /= 255.0
-
-
-    _, C, H, W = src_feats.shape
-    factor = H / depth_map_float.shape[0]
-    # factor2 = W / depth_map_float.shape[1]
-    # assert factor1 == factor2, f"Factors are not equal: factor1 = {factor1}, factor2 = {factor2}"
-    # factor = factor2
-    new_H = int(H / factor)
-    new_W = int(W / factor)
-
-    # downsampled_image = cv2.resize(np.transpose(src_image, (1, 2, 0)), (new_W, new_H))
-    depth_map_float = cv2.resize(depth_map_float, (W, H), interpolation=cv2.INTER_CUBIC)  ### cv2.INTER_LINEAR
-    src_feats = src_feats[0]
-    tar_feats = tar_feats[0]    
-    downsampled_image = np.transpose(src_feats, (2, 0, 1))
-
-    points_3D, colors = depth_to_3d_points_with_colors(depth_map_float, src_intrinsic, downsampled_image)
-    print("###colors shape#####")
-    print(colors.shape)
-    # Transform points with colors to target camera frame
-    transformed_with_colors = transform_points_with_colors(points_3D, colors, relative_homo_mat[:3, :3], relative_homo_mat[:3, 3])
-
-    # Ensure the points and colors arrays have compatible shapes before concatenation
-    # transformed_with_colors = np.concatenate((transformed_points, colors), axis=1)
-    print(transformed_with_colors.shape)
-
-    # Project transformed 3D points with colors onto the target camera image plane
-    projected_points_2D_colors = project_points_with_colors(transformed_with_colors, tar_intrinsic)
-
-    # Warp the source image to the target view
-    warped_image = populate_image_with_colors(projected_points_2D_colors, H, W)
-    warped_image = warped_image.transpose(2, 0, 1)
-    print(warped_image.shape)
-    project_and_save_tsne_image(warped_image, 'tsne_warped_viz.png')
