@@ -90,9 +90,10 @@ def depth_to_3d_points_with_colors(depth_map, intrinsic_matrix, image):
     
     return points_3D, colors
 
-def transform_points_with_colors(points, rotation_matrix, translation_vector):
+def transform_points_with_colors(points, colors, rotation_matrix, translation_vector):
     points_transformed = np.dot(points, rotation_matrix.T) + translation_vector
-    return points_transformed
+    points_with_colors = np.concatenate((points_transformed, colors), axis=1)  # Shape: (H*W, 7)
+    return points_with_colors
 
 def depth_to_3d_points_with_colors(depth_map, intrinsic_matrix, image):
     H, W = depth_map.shape
@@ -306,9 +307,11 @@ if __name__ == "__main__":
     # Iterate through the data to find the specific timestamp
     for entry in data:
         # print("#####found $$$$$$$##########")
-        timestamp = entry['timestamp']
+        timestamp = int(entry['timestamp'])
+        print("$$$$$$  json file  $$$$$$$")
+        print(timestamp)
         #     pose = entry['pose']
-        if timestamp == str(src_frame_id):
+        if timestamp == int(src_frame_id):
             print("#####found $$$$$$$##########")
             src_homo_mat_sample = np.array(entry['pose'])
             src_intrinsic = np.array(entry['intrinsics'])
@@ -322,22 +325,25 @@ if __name__ == "__main__":
             src_intrinsic[1, 2] = 128  #723.6698
             #########downsampling to 32 x 32 feature map
             break
+        else: 
+            continue
     
     print("#####1 $$$$$$$##########")
     print(src_homo_mat_sample)
     for filename in filenames:          
         if filename.endswith('.png'):
             frame_id = filename.split('.')[0]
-        if frame_id == src_frame_id:
+        if int(frame_id) == int(src_frame_id):
             continue
         for entry in data:
-            if entry['timestamp'] == frame_id:
+            timestamp = int(entry['timestamp'])
+            if timestamp == int(frame_id):
                 tar_homo_mat_sample = np.array(entry['pose'])
                 tar_intrinsic = np.array(entry['intrinsics'])
-                tar_intrinsic[0, :] = tar_intrinsic[0, :] * tgt_image.shape[1] 
-                tar_intrinsic[1, :] = tar_intrinsic[1, :] * tgt_image.shape[0] 
-                scale1 = 256/min(tgt_image.shape[:2]) #########final feature map size is 32
-                scale2 = 256/(min(tgt_image.shape[:2]) * (tar_intrinsic[1, 1]/tar_intrinsic[0, 0]))
+                tar_intrinsic[0, :] = tar_intrinsic[0, :] * src_image.shape[1] 
+                tar_intrinsic[1, :] = tar_intrinsic[1, :] * src_image.shape[0] 
+                scale1 = 256/min(src_image.shape[:2]) #########final feature map size is 32
+                scale2 = 256/(min(src_image.shape[:2]) * (tar_intrinsic[1, 1]/tar_intrinsic[0, 0]))
                 tar_intrinsic[0, 0] = tar_intrinsic[0, 0] * scale1
                 tar_intrinsic[1, 1] = tar_intrinsic[1, 1] * scale2
                 tar_intrinsic[0, 2] = 128    #954.7021
@@ -346,8 +352,8 @@ if __name__ == "__main__":
         
         print("#####1 $$$$$$$##########")
         print(tar_homo_mat_sample)
-        tgt_image_path = os.path.join(base_dir, folder_type, file_type, filename)
-        tgt_image = load_resize_image_cv2(tgt_image_path)
+        # tgt_image_path = os.path.join(base_dir, folder_type, file_type, filename)
+        # tgt_image = load_resize_image_cv2(tgt_image_path)
         # tgt_image = center_crop_img_and_resize(tgt_image)
 
 
@@ -364,11 +370,12 @@ if __name__ == "__main__":
         print(os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.npy'))
         # Load corresponding depth map
         frame_id = filename.split('.')[0]
-        depth_map_path = os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.npy')
-        depth_map = np.load(depth_map_path)[0]
+        depth_map_path = os.path.join(base_dir, folder_type, file_type, frame_id + '.npy')
+        depth_map = np.load(depth_map_path)[0][0]
         # depth_map = center_crop_img_and_resize(depth_map, 256)
 
         print(depth_map.shape)
+        print(src_image.shape)
         if depth_map is None:
             raise ValueError(f"Failed to load depth map")
 
@@ -396,14 +403,15 @@ if __name__ == "__main__":
         # new_W = int(W / factor)
 
         # downsampled_image = cv2.resize(np.transpose(src_image, (1, 2, 0)), (new_W, new_H))
-        depth_map_float = cv2.resize(depth_map_float, (W, H), interpolation=cv2.INTER_CUBIC)  ### cv2.INTER_LINEAR
-        src_feats = src_feats[0]
-        tar_feats = tar_feats[0]    
-        downsampled_image = np.transpose(src_feats, (2, 0, 1))
+        # depth_map_float = cv2.resize(depth_map_float, (W, H), interpolation=cv2.INTER_CUBIC)  ### cv2.INTER_LINEAR
+        # src_feats = src_feats[0]
+        # tar_feats = tar_feats[0]    
+        downsampled_image = np.transpose(src_image, (2, 0, 1))
 
         points_3D, colors = depth_to_3d_points_with_colors(depth_map_float, src_intrinsic, downsampled_image)
         print("###colors shape#####")
         print(colors.shape)
+        print(points_3D.shape)
         # Transform points with colors to target camera frame
         transformed_with_colors = transform_points_with_colors(points_3D, colors, relative_homo_mat[:3, :3], relative_homo_mat[:3, 3])
 
