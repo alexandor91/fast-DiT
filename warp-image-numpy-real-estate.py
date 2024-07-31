@@ -268,9 +268,9 @@ if __name__ == "__main__":
     filename2 = '87654233.png'
     tar_vae_features = 'frame_000470.npy'
 
-    folder_type = 'fast-DiT/data/realestate/1'
+    folder_type = 'fast-DiT/data/realestate/5'
     file_type = 'rgb'
-
+    output_folder = 'warped-output'
     # Load the JSON file
     json_file = 'pose.json'
     with open(os.path.join(base_dir, folder_type, json_file), 'r') as file:
@@ -319,10 +319,10 @@ if __name__ == "__main__":
             src_intrinsic[1, :] = src_intrinsic[1, :] * src_image.shape[0] 
             scale1 = 256/min(src_image.shape[:2]) #########final feature map size is 32
             scale2 = 256/(min(src_image.shape[:2]) * (src_intrinsic[1, 1]/src_intrinsic[0, 0]))
-            src_intrinsic[0, 0] = src_intrinsic[0, 0] * scale1
-            src_intrinsic[1, 1] = src_intrinsic[1, 1] * scale2
-            src_intrinsic[0, 2] = 128  #954.7021
-            src_intrinsic[1, 2] = 128  #723.6698
+            # src_intrinsic[0, 0] = src_intrinsic[0, 0] * scale1
+            # src_intrinsic[1, 1] = src_intrinsic[1, 1] * scale2
+            # src_intrinsic[0, 2] = 128  #954.7021
+            # src_intrinsic[1, 2] = 128  #723.6698
             #########downsampling to 32 x 32 feature map
             break
         else: 
@@ -344,10 +344,10 @@ if __name__ == "__main__":
                 tar_intrinsic[1, :] = tar_intrinsic[1, :] * src_image.shape[0] 
                 scale1 = 256/min(src_image.shape[:2]) #########final feature map size is 32
                 scale2 = 256/(min(src_image.shape[:2]) * (tar_intrinsic[1, 1]/tar_intrinsic[0, 0]))
-                tar_intrinsic[0, 0] = tar_intrinsic[0, 0] * scale1
-                tar_intrinsic[1, 1] = tar_intrinsic[1, 1] * scale2
-                tar_intrinsic[0, 2] = 128    #954.7021
-                tar_intrinsic[1, 2] = 128    #723.6698
+                # tar_intrinsic[0, 0] = tar_intrinsic[0, 0] * scale1
+                # tar_intrinsic[1, 1] = tar_intrinsic[1, 1] * scale2
+                # tar_intrinsic[0, 2] = 128    #954.7021
+                # tar_intrinsic[1, 2] = 128    #723.6698
                 break
         
         print("#####1 $$$$$$$##########")
@@ -426,6 +426,16 @@ if __name__ == "__main__":
         warped_image = populate_image_with_colors(projected_points_2D_colors, H, W)
         warped_image = warped_image.transpose(2, 0, 1)
         print(warped_image.shape)
+        # Check if the directory exists, create if it doesn't
+        output_dir = os.path.join(base_dir, folder_type, output_folder)
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        # Define the full path for the file
+        save_path = os.path.join(output_dir, str(frame_id) + '.png')
+        
+        # Save the numpy array as a PNG image
+        cv2.imwrite(save_path, warped_image.transpose(1, 2, 0))
         # project_and_save_tsne_image(warped_image, 'tsne_warped_viz.png')
 
     # fig, ax = plt.subplots()
