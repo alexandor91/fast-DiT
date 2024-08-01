@@ -268,7 +268,7 @@ if __name__ == "__main__":
     filename2 = '87654233.png'
     tar_vae_features = 'frame_000470.npy'
 
-    folder_type = 'fast-DiT/data/scannet/scene0708_00'
+    folder_type = 'fast-DiT/data/scannet/scene0806_00'
     file_type = 'color'
     output_folder = 'warped-output'
     # Load the JSON file
@@ -312,7 +312,7 @@ if __name__ == "__main__":
         print(timestamp)
         #     pose = entry['pose']
         if timestamp == int(src_frame_id):
-            print("#####found $$$$$$$##########")
+            print("#####found source$$$$$$$##########")
             src_homo_mat_sample = np.array(data["poses"][str(timestamp)])
             src_intrinsic = np.array(data["intrinsic"]["intrinsic_color"])[:3, :3]
             # src_intrinsic[0, :] = src_intrinsic[0, :] * src_image.shape[1] 
@@ -341,7 +341,7 @@ if __name__ == "__main__":
             print(timestamp)
             #     pose = entry['pose']
             if timestamp == int(frame_id):
-                print("#####found $$$$$$$##########")
+                print("#####found 2$$$$$$$##########")
                 tar_homo_mat_sample = np.array(data["poses"][str(timestamp)])
                 tar_intrinsic = np.array(data["intrinsic"]["intrinsic_color"])[:3, :3]
                 # src_intrinsic[0, :] = src_intrinsic[0, :] * src_image.shape[1] 
@@ -371,17 +371,18 @@ if __name__ == "__main__":
         # folder_type = 'fast-DiT/data/real-estate/depth'
         # depth_map = cv2.imread(os.path.join(base_dir, folder_type, depth_file), cv2.IMREAD_UNCHANGED)   
         file_type = 'depth'
-        print("########$$$$$$$$$$$$$##########")
+        print("########$$$$$$depth map!!$$$$$$$##########")
         # print(os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.npy'))
         # Load corresponding depth map
         frame_id = filename.split('.')[0]
         depth_map_path = os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.png')
         depth_map = cv2.imread(depth_map_path, cv2.IMREAD_UNCHANGED)
-        depth_map = depth_map/1000.0
+        # depth_map = depth_map/1000.0
         # depth_map = center_crop_img_and_resize(depth_map, 256)
 
         print(depth_map)
         print(src_image.shape)
+        print(depth_map.shape)
         if depth_map is None:
             raise ValueError(f"Failed to load depth map")
 
@@ -397,6 +398,8 @@ if __name__ == "__main__":
             print("\nIntrinsics Matrix:")
             print(src_intrinsic)
 
+        # src_homo_mat_sample = np.linalg.inv(src_homo_mat_sample)
+        # tar_homo_mat_sample = np.linalg.inv(tar_homo_mat_sample)
         relative_homo_mat = np.dot(tar_homo_mat_sample, np.linalg.inv(src_homo_mat_sample))
 
         # _, C, H, W = src_feats.shape

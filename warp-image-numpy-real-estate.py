@@ -268,7 +268,7 @@ if __name__ == "__main__":
     filename2 = '87654233.png'
     tar_vae_features = 'frame_000470.npy'
 
-    folder_type = 'fast-DiT/data/realestate/5'
+    folder_type = 'fast-DiT/data/realestate/1'
     file_type = 'rgb'
     output_folder = 'warped-output'
     # Load the JSON file
@@ -391,6 +391,8 @@ if __name__ == "__main__":
             print("\nIntrinsics Matrix:")
             print(src_intrinsic)
 
+        # src_homo_mat_sample = np.linalg.inv(src_homo_mat_sample)
+        # tar_homo_mat_sample = np.linalg.inv(tar_homo_mat_sample)
         relative_homo_mat = np.dot(tar_homo_mat_sample, np.linalg.inv(src_homo_mat_sample))
 
         # _, C, H, W = src_feats.shape
