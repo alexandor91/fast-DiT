@@ -253,20 +253,22 @@ def project_and_save_tsne_image(src_features, output_path='tsne_src_viz.png'):
     cv2.imwrite(output_path, tsne_image)
     return tsne_image
 
+# base_dir = '/home/student.unimelb.edu.au/xueyangk'
+# folder_type = 'fast-DiT/data'
+# folder_type = 'fast-DiT/data/real-estate/rgb'
+# img_folder_type = 'rgb'
+# filename = 'frame_000440.jpg'
+# filename = '86352933.png'
+# src_vae_features = 'frame_000440.npy'
+
+# filename2 = 'frame_000470.jpg'
+# filename2 = '87654233.png'
+# tar_vae_features = 'frame_000470.npy'
 if __name__ == "__main__":
     # Download all DiT checkpoints
     print("###### main starts#########")
-    base_dir = '/home/student.unimelb.edu.au/xueyangk'
-    folder_type = 'fast-DiT/data'
-    folder_type = 'fast-DiT/data/real-estate/rgb'
-    img_folder_type = 'rgb'
-    filename = 'frame_000440.jpg'
-    filename = '86352933.png'
-    src_vae_features = 'frame_000440.npy'
 
-    filename2 = 'frame_000470.jpg'
-    filename2 = '87654233.png'
-    tar_vae_features = 'frame_000470.npy'
+    base_dir = '/home/student.unimelb.edu.au/xueyangk'
 
     folder_type = 'fast-DiT/data/realestate/1'
     file_type = 'rgb'
@@ -298,6 +300,7 @@ if __name__ == "__main__":
     # ###########load VAE numpy features################
     # src_feats = np.load(os.path.join(base_dir, folder_type, src_vae_features))
     # tar_feats = np.load(os.path.join(base_dir, folder_type, tar_vae_features))
+
     src_image_path = os.path.join(base_dir, folder_type, file_type, filenames[0])
     src_image = load_resize_image_cv2(src_image_path)    
     # src_image = center_crop_img_and_resize(src_image)
@@ -355,7 +358,6 @@ if __name__ == "__main__":
         # tgt_image_path = os.path.join(base_dir, folder_type, file_type, filename)
         # tgt_image = load_resize_image_cv2(tgt_image_path)
         # tgt_image = center_crop_img_and_resize(tgt_image)
-
 
         # Define the target timestamp
         # src_timestamp = 86352933 # Example timestamp, replace with the desired one

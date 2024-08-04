@@ -258,7 +258,9 @@ def evaluate(generated_dir, ground_truth_dir):
         with torch.no_grad():
             real_feature = inception_model(gt_image.unsqueeze(0)).flatten(1).cpu().numpy()
             gen_feature = inception_model(gen_image.unsqueeze(0)).flatten(1).cpu().numpy()
-        
+            print("#######$$$$$$ inception feathre $$$$$$$###########")
+            print(real_feature)
+            print(gen_feature)
         real_features.append(real_feature)
         generated_features.append(gen_feature)
         
@@ -357,7 +359,7 @@ if __name__ == "__main__":
 
     ############scale and crop the gt folder from the original size to 256, same size of our generated image size############
     gt_img_files = sorted(os.listdir(ground_truth_dir))
-    output_folder_type = "fast-DiT/data/real-estate/cropped-gt"
+    output_folder_type = "fast-DiT/data/real-estate/rgb"
     for gt_image in gt_img_files:     ###########GT IN 256
         print("######gt image########")
         print(gt_image)

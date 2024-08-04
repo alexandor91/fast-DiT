@@ -6,7 +6,7 @@ from PIL import Image
 from sklearn.manifold import TSNE
 import umap
 import cv2
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import json
 # import zoedepth  # Assuming ZoeDepth is a hypothetical package
 
@@ -257,31 +257,32 @@ if __name__ == "__main__":
     # Download all DiT checkpoints
     print("###### main starts#########")
     base_dir = '/home/student.unimelb.edu.au/xueyangk'
-    folder_type = 'fast-DiT/data'
     folder_type = 'fast-DiT/data/real-estate/rgb'
     img_folder_type = 'rgb'
-    filename = 'frame_000440.jpg'
-    filename = '86352933.png'
-    src_vae_features = 'frame_000440.npy'
+    # filename = 'frame_000440.jpg'
+    # filename = '86352933.png'
+    # src_vae_features = 'frame_000440.npy'
 
-    filename2 = 'frame_000470.jpg'
-    filename2 = '87654233.png'
-    tar_vae_features = 'frame_000470.npy'
+    # filename2 = 'frame_000470.jpg'
+    # filename2 = '87654233.png'
+    # tar_vae_features = 'frame_000470.npy'
 
-    folder_type = 'fast-DiT/data/scannet/scene0806_00'
-    file_type = 'color'
+    folder_type = 'fast-DiT/data/scannet-samples/scene0616_00'
+    file_type = 'rgb'
+    depth_folder = 'depth'
+    pose_folder = 'c2w'
     output_folder = 'warped-output'
     # Load the JSON file
-    json_file = 'scene_data.json'
-    with open(os.path.join(base_dir, folder_type, json_file), 'r') as file:
-        # file = os.path.join(base_dir, folder_type, json_file)
-        data = json.load(file)
+    # json_file = 'scene_data.json'
+    # with open(os.path.join(base_dir, folder_type, json_file), 'r') as file:
+    #     # file = os.path.join(base_dir, folder_type, json_file)
+    #     data = json.load(file)
     # print(data)
     filenames = []
 
     # Iterate over files in the directory
     for filename in os.listdir(os.path.join(base_dir, folder_type, file_type)):
-        if filename.endswith('.jpg'):
+        if filename.endswith('.png'):
             filenames.append(filename)
     
     # Sort filenames (assuming they are timestamps)
@@ -298,61 +299,61 @@ if __name__ == "__main__":
     # ###########load VAE numpy features################
     # src_feats = np.load(os.path.join(base_dir, folder_type, src_vae_features))
     # tar_feats = np.load(os.path.join(base_dir, folder_type, tar_vae_features))
-    src_image_path = os.path.join(base_dir, folder_type, file_type, filenames[0])
-    src_image = load_resize_image_cv2(src_image_path)    
-    # src_image = center_crop_img_and_resize(src_image)
-    src_frame_id = str(filenames[0].split('.')[0])
-    print(src_frame_id)
 
     # Iterate through the data to find the specific timestamp
-    for entry in data["poses"]:
-        # print("#####found $$$$$$$##########")
-        timestamp = int(entry)
-        print("$$$$$$  json file  $$$$$$$")
-        print(timestamp)
-        #     pose = entry['pose']
-        if timestamp == int(src_frame_id):
-            print("#####found source$$$$$$$##########")
-            src_homo_mat_sample = np.array(data["poses"][str(timestamp)])
-            src_intrinsic = np.array(data["intrinsic"]["intrinsic_color"])[:3, :3]
-            # src_intrinsic[0, :] = src_intrinsic[0, :] * src_image.shape[1] 
-            # src_intrinsic[1, :] = src_intrinsic[1, :] * src_image.shape[0] 
-            scale1 = 256/min(src_image.shape[:2]) #########final feature map size is 32
-            scale2 = 256/(min(src_image.shape[:2]) * (src_intrinsic[1, 1]/src_intrinsic[0, 0]))
-            # src_intrinsic[0, 0] = src_intrinsic[0, 0] * scale1
-            # src_intrinsic[1, 1] = src_intrinsic[1, 1] * scale2
-            # src_intrinsic[0, 2] = 128  #954.7021
-            # src_intrinsic[1, 2] = 128  #723.6698
-            #########downsampling to 32 x 32 feature map
-            break
-        else: 
-            continue
-    
+    # for entry in data["poses"]:
+    #     # print("#####found $$$$$$$##########")
+    #     timestamp = int(entry)
+    #     print("$$$$$$  json file  $$$$$$$")
+    #     print(timestamp)
+    #     #     pose = entry['pose']
+    #     if timestamp == int(src_frame_id):
+    #         print("#####found source$$$$$$$##########")
+    #         src_homo_mat_sample = np.array(data["poses"][str(timestamp)])
+    #         src_intrinsic = np.array(data["intrinsic"]["intrinsic_color"])[:3, :3]
+    #         # src_intrinsic[0, :] = src_intrinsic[0, :] * src_image.shape[1] 
+    #         # src_intrinsic[1, :] = src_intrinsic[1, :] * src_image.shape[0] 
+    #         scale1 = 256/min(src_image.shape[:2]) #########final feature map size is 32
+    #         scale2 = 256/(min(src_image.shape[:2]) * (src_intrinsic[1, 1]/src_intrinsic[0, 0]))
+    #         # src_intrinsic[0, 0] = src_intrinsic[0, 0] * scale1
+    #         # src_intrinsic[1, 1] = src_intrinsic[1, 1] * scale2
+    #         # src_intrinsic[0, 2] = 128  #954.7021
+    #         # src_intrinsic[1, 2] = 128  #723.6698
+    #         #########downsampling to 32 x 32 feature map
+    #         break
+    #     else: 
+    #         continue
+    if filenames[0].endswith('.png'):
+        src_image_path = os.path.join(base_dir, folder_type, file_type, filenames[0])
+        src_image = load_resize_image_cv2(src_image_path)    
+        # src_image = center_crop_img_and_resize(src_image)
+        src_frame_id = str(filenames[0].split('.')[0])
+        src_homo_mat_sample = np.load(os.path.join(base_dir, folder_type, pose_folder, str(src_frame_id) + '.npy'))
+        src_intrinsic = np.load(os.path.join(base_dir, folder_type, 'intrinsic.npy'))[:3, :3]  
     print("#####1 $$$$$$$##########")
     print(src_homo_mat_sample)
     for filename in filenames:          
-        if filename.endswith('.jpg'):
-            frame_id = filename.split('.')[0]
+        frame_id = filename.split('.')[0]
         if int(frame_id) == int(src_frame_id):
             continue
-        for entry in data["poses"]:
-            timestamp = int(entry)
-            print("$$$$$$  json file  $$$$$$$")
-            print(timestamp)
+        # for entry in data["poses"]:
+        #     timestamp = int(entry)
+        #     print("$$$$$$  json file  $$$$$$$")
+        #     print(timestamp)
             #     pose = entry['pose']
-            if timestamp == int(frame_id):
-                print("#####found 2$$$$$$$##########")
-                tar_homo_mat_sample = np.array(data["poses"][str(timestamp)])
-                tar_intrinsic = np.array(data["intrinsic"]["intrinsic_color"])[:3, :3]
-                # src_intrinsic[0, :] = src_intrinsic[0, :] * src_image.shape[1] 
-                # src_intrinsic[1, :] = src_intrinsic[1, :] * src_image.shape[0] 
-                scale1 = 256/min(src_image.shape[:2]) #########final feature map size is 32
-                scale2 = 256/(min(src_image.shape[:2]) * (src_intrinsic[1, 1]/src_intrinsic[0, 0]))
-                # tar_intrinsic[0, 0] = tar_intrinsic[0, 0] * scale1
-                # tar_intrinsic[1, 1] = tar_intrinsic[1, 1] * scale2
-                # tar_intrinsic[0, 2] = 128    #954.7021
-                # tar_intrinsic[1, 2] = 128    #723.6698
-                break
+        #if timestamp == int(frame_id):
+        # print("#####found 2$$$$$$$##########")
+        tar_homo_mat_sample = np.load(os.path.join(base_dir, folder_type, pose_folder, str(frame_id) + '.npy'))
+        tar_intrinsic = np.load(os.path.join(base_dir, folder_type, 'intrinsic.npy'))[:3, :3]
+        # src_intrinsic[0, :] = src_intrinsic[0, :] * src_image.shape[1] 
+        # src_intrinsic[1, :] = src_intrinsic[1, :] * src_image.shape[0] 
+        # scale1 = 256/min(src_image.shape[:2]) #########final feature map size is 32
+        # scale2 = 256/(min(src_image.shape[:2]) * (src_intrinsic[1, 1]/src_intrinsic[0, 0]))
+        # tar_intrinsic[0, 0] = tar_intrinsic[0, 0] * scale1
+        # tar_intrinsic[1, 1] = tar_intrinsic[1, 1] * scale2
+        # tar_intrinsic[0, 2] = 128    #954.7021
+        # tar_intrinsic[1, 2] = 128    #723.6698
+        # sbreak
         
         print("#####1 $$$$$$$##########")
         print(src_homo_mat_sample)
@@ -370,12 +371,12 @@ if __name__ == "__main__":
         # depth_file = '86352933_depth.npy'
         # folder_type = 'fast-DiT/data/real-estate/depth'
         # depth_map = cv2.imread(os.path.join(base_dir, folder_type, depth_file), cv2.IMREAD_UNCHANGED)   
-        file_type = 'depth'
+        # file_type = 'depth'
         print("########$$$$$$depth map!!$$$$$$$##########")
         # print(os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.npy'))
         # Load corresponding depth map
         frame_id = filename.split('.')[0]
-        depth_map_path = os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.png')
+        depth_map_path = os.path.join(base_dir, folder_type, depth_folder, str(frame_id) + '.png')
         depth_map = cv2.imread(depth_map_path, cv2.IMREAD_UNCHANGED)
         # depth_map = depth_map/1000.0
         # depth_map = center_crop_img_and_resize(depth_map, 256)
@@ -398,8 +399,8 @@ if __name__ == "__main__":
             print("\nIntrinsics Matrix:")
             print(src_intrinsic)
 
-        # src_homo_mat_sample = np.linalg.inv(src_homo_mat_sample)
-        # tar_homo_mat_sample = np.linalg.inv(tar_homo_mat_sample)
+        src_homo_mat_sample = np.linalg.inv(src_homo_mat_sample)
+        tar_homo_mat_sample = np.linalg.inv(tar_homo_mat_sample)
         relative_homo_mat = np.dot(tar_homo_mat_sample, np.linalg.inv(src_homo_mat_sample))
 
         # _, C, H, W = src_feats.shape
@@ -457,6 +458,3 @@ if __name__ == "__main__":
     # Save the displayed image with jet colormap
     # plt.savefig('depth_map_magma_color.png')
     # plt.close(fig)
-
-
-    # depth_map_float /= 255.0
