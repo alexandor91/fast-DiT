@@ -13,6 +13,23 @@ from transformers import CLIPProcessor, CLIPModel
 # src_type = 'rgb'
 # file_type = 'warped-output'
 # output_folder = 'inpaint-output'
+def center_crop_img_and_resize(src_image, image_size):
+    """
+    Center cropping implementation, modified to work with PIL images.
+    """
+    while min(src_image.size) >= 2 * image_size:
+        new_size = (src_image.size[0] // 2, src_image.size[1] // 2)
+        src_image = src_image.resize(new_size, Image.ANTIALIAS)
+
+    scale = image_size / min(src_image.size)
+    new_size = (round(src_image.size[0] * scale), round(src_image.size[1] * scale))
+    src_image = src_image.resize(new_size, Image.BICUBIC)
+
+    crop_y = (src_image.size[1] - image_size) // 2
+    crop_x = (src_image.size[0] - image_size) // 2
+    cropped_image = src_image.crop((crop_x, crop_y, crop_x + image_size, crop_y + image_size))
+
+    return cropped_image
 
 base_dir = '/home/student.unimelb.edu.au/xueyangk'
 # folder_type = 'fast-DiT/data/real-estate/rgb'
@@ -25,12 +42,13 @@ base_dir = '/home/student.unimelb.edu.au/xueyangk'
 # filename2 = '87654233.png'
 # tar_vae_features = 'frame_000470.npy'
 
-folder_type = 'fast-DiT/data/scannet-samples/scene0560_00'
+folder_type = 'fast-DiT/data/scannet-samples/scene0181_01'
+folder_type = 'fast-DiT/data/realestate/5'
 file_type = 'warped-output'
 src_type = 'rgb'
 depth_folder = 'depth'
 pose_folder = 'c2w'
-output_folder = 'warped-output'
+output_folder = 'inpaint-output'
 # json_file = os.path.join(base_dir, folder_type, 'pose.json')
 
 
@@ -71,6 +89,7 @@ for filename in filenames:
     # Load the warped image to inpaint
     init_image_path = os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.png')
     init_image = Image.open(init_image_path).convert("RGB")
+    init_image = center_crop_img_and_resize(init_image, 256)
     init_image_np = np.array(init_image)
 
     # Create the inverted mask (white pixels are to be inpainted)
@@ -80,8 +99,9 @@ for filename in filenames:
     mask_image = Image.fromarray(inverted_mask).convert("L")
 
     # Load the source image for condition embedding
-    condition_image_path = os.path.join(base_dir, folder_type, src_type, '0.png')
+    condition_image_path = os.path.join(base_dir, folder_type, src_type, '176276100.png')
     condition_image = Image.open(condition_image_path).convert("RGB")
+    condition_image = center_crop_img_and_resize(condition_image, 256)
 
     # Generate CLIP embedding for the condition image
     inputs = clip_processor(images=condition_image, return_tensors="pt").to("cuda")
@@ -103,7 +123,7 @@ for filename in filenames:
                     guidance_scale=7.5).images[0]
 
     # Save the result
-    output_dir = os.path.join(base_dir, output_folder, 'scene0560_00')
+    output_dir = os.path.join(base_dir, output_folder, '2')
     os.makedirs(output_dir, exist_ok=True)
     result.save(os.path.join(output_dir,  str(frame_id) + '.png'))
 
