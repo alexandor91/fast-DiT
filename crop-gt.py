@@ -45,14 +45,15 @@ def process_images(image_folder, output_folder, image_size=256):
 
 if __name__ == "__main__":
     base_dir = '/home/student.unimelb.edu.au/xueyangk'
-    folder_type = 'fast-DiT/data/realestate/2'
+    folder_type = 'fast-DiT/data/realestate/5'
     file_type = 'rgb'
-    folder_type = 'fast-DiT/data/scannet-samples/scene0181_01'
-    file_type = 'rgb'
+    folder_type = 'fast-DiT/data/scannet-samples/scene0616_00'
+    folder_type = 'fast-DiT/data/realestate/5'
+    file_type = 'warped-output'
     depth_folder = 'depth'
     pose_folder = 'c2w'
-    output_folder = 'cropped_images'
+    output_folder = 'cropped_warpped_images'
     image_folder = os.path.join(base_dir, folder_type, file_type)  # Change this to the correct image folder
-    output_folder = os.path.join(base_dir, output_folder, 'scene0181_01')  # Change this to the desired output folder
+    output_folder = os.path.join(base_dir, output_folder, '5')  # Change this to the desired output folder
 
     process_images(image_folder, output_folder)

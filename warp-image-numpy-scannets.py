@@ -267,7 +267,7 @@ if __name__ == "__main__":
     # filename2 = '87654233.png'
     # tar_vae_features = 'frame_000470.npy'
 
-    folder_type = 'fast-DiT/data/scannet-samples/scene0616_00'
+    folder_type = 'fast-DiT/data/scannet-samples/scene0181_01'
     file_type = 'rgb'
     depth_folder = 'depth'
     pose_folder = 'c2w'
@@ -286,8 +286,9 @@ if __name__ == "__main__":
             filenames.append(filename)
     
     # Sort filenames (assuming they are timestamps)
-    filenames.sort()
-    print(filenames)
+    # Sort filenames (assuming they are timestamps)
+    filenames_sorted = sorted(filenames, key=lambda x: int(os.path.splitext(x)[0]))
+    print(filenames_sorted)
 
     src_intrinsic = None
     tar_intrinsic = None
@@ -332,7 +333,8 @@ if __name__ == "__main__":
         src_intrinsic = np.load(os.path.join(base_dir, folder_type, 'intrinsic.npy'))[:3, :3]  
     print("#####1 $$$$$$$##########")
     print(src_homo_mat_sample)
-    for filename in filenames:          
+    filenames_sorted.pop(0)  # Remove the first file from the list
+    for filename in filenames_sorted:               
         frame_id = filename.split('.')[0]
         if int(frame_id) == int(src_frame_id):
             continue
@@ -399,8 +401,8 @@ if __name__ == "__main__":
             print("\nIntrinsics Matrix:")
             print(src_intrinsic)
 
-        src_homo_mat_sample = np.linalg.inv(src_homo_mat_sample)
-        tar_homo_mat_sample = np.linalg.inv(tar_homo_mat_sample)
+        # src_homo_mat_sample = np.linalg.inv(src_homo_mat_sample)
+        # tar_homo_mat_sample = np.linalg.inv(tar_homo_mat_sample)
         relative_homo_mat = np.dot(tar_homo_mat_sample, np.linalg.inv(src_homo_mat_sample))
 
         # _, C, H, W = src_feats.shape

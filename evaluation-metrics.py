@@ -10,10 +10,65 @@ from skimage.metrics import peak_signal_noise_ratio as psnr, structural_similari
 from tqdm import tqdm
 from sklearn.metrics.pairwise import polynomial_kernel
 import json
+import tensorflow as tf
+from PIL import Image
+
+
+fid_model = tf.keras.applications.InceptionV3(include_top=False, pooling='avg', input_shape=(299, 299, 3))
 
 # Load the LPIPS model
 lpips_model = lpips.LPIPS(net='alex')
 
+def preprocess_image(image_path):
+    image = Image.open(image_path).convert('RGB')
+    image = image.resize((299, 299))
+    image = np.array(image)
+    image = np.expand_dims(image, axis=0)
+    image = tf.keras.applications.inception_v3.preprocess_input(image)
+    return image
+
+def compute_fid(real_features, generated_features):
+    # Check if the inputs are 2D arrays
+    if len(real_features.shape) == 1:
+        real_features = real_features.reshape(1, -1)
+    if len(generated_features.shape) == 1:
+        generated_features = generated_features.reshape(1, -1)
+    
+    # Compute the mean and covariance of the real and generated features
+    mu1 = np.mean(real_features, axis=0)
+    sigma1 = np.cov(real_features, rowvar=False) if real_features.shape[0] > 1 else np.zeros((mu1.size, mu1.size))
+    mu2 = np.mean(generated_features, axis=0)
+    sigma2 = np.cov(generated_features, rowvar=False) if generated_features.shape[0] > 1 else np.zeros((mu2.size, mu2.size))
+
+    # Print shapes to debug
+    print("mu1 shape:", mu1.shape)
+    print("sigma1 shape:", sigma1.shape)
+    print("mu2 shape:", mu2.shape)
+    print("sigma2 shape:", sigma2.shape)
+
+    # Ensure the covariance matrices are square
+    if sigma1.shape[0] != sigma1.shape[1] or sigma2.shape[0] != sigma2.shape[1]:
+        raise ValueError("Covariance matrices are not square!")
+    
+    # Calculate the mean squared difference
+    ssdiff = np.sum((mu1 - mu2)**2.0)
+
+    # Compute the square root of the product of the covariance matrices
+    covmean = sqrtm(sigma1.dot(sigma2))
+
+    # Handle possible numerical instability
+    if np.iscomplexobj(covmean):
+        covmean = covmean.real
+
+    # Compute the final FID score
+    fid = ssdiff + np.trace(sigma1 + sigma2 - 2.0 * covmean)
+    return np.sqrt(fid)
+
+def extract_features(image_path):
+    image = preprocess_image(image_path)
+    feature = fid_model.predict(image)
+    feature = feature.flatten()
+    return feature
 
 def center_crop_img_and_resize(src_image, image_size):
     """
@@ -44,29 +99,34 @@ def load_image(file_path):
     image = transforms.ToTensor()(image)
     return image
 
-def compute_fid(real_features, generated_features):
-    mu1 = np.mean(real_features, axis=0)
-    sigma1 = np.cov(real_features, rowvar=False)
-    mu2 = np.mean(generated_features, axis=0)
-    sigma2 = np.cov(generated_features, rowvar=False)
-    ssdiff = np.sum((mu1 - mu2)**2.0)
-    covmean = sqrtm(sigma1.dot(sigma2))
-    if np.iscomplexobj(covmean):
-        covmean = covmean.real
-    fid = ssdiff + np.trace(sigma1 + sigma2 - 2.0 * covmean)
-    return fid
+# def compute_fid(real_features, generated_features):
+#     mu1 = np.mean(real_features, axis=0)
+#     sigma1 = np.cov(real_features, rowvar=False)
+#     mu2 = np.mean(generated_features, axis=0)
+#     sigma2 = np.cov(generated_features, rowvar=False)
+#     ssdiff = np.sum((mu1 - mu2)**2.0)
+#     covmean = sqrtm(sigma1.dot(sigma2))
+#     if np.iscomplexobj(covmean):
+#         covmean = covmean.real
+#     fid = ssdiff + np.trace(sigma1 + sigma2 - 2.0 * covmean)
+#     return np.sqrt(fid)
 
 # Function to compute the KID
 def compute_kid(real_features, generated_features, degree=3, coef0=1, gamma=None):
+    # Ensure the features are 2D arrays
+    if len(real_features.shape) == 1:
+        real_features = real_features.reshape(1, -1)
+    if len(generated_features.shape) == 1:
+        generated_features = generated_features.reshape(1, -1)
+
+    # Compute the polynomial kernel for real and generated features
     K_real = polynomial_kernel(real_features, degree=degree, coef0=coef0, gamma=gamma)
     K_gen = polynomial_kernel(generated_features, degree=degree, coef0=coef0, gamma=gamma)
-    K_real_gen = polynomial_kernel(real_features, generated_features, degree=degree, coef0=coef0, gamma=gamma)
-    
-    m = real_features.shape[0]
-    n = generated_features.shape[0]
-    
-    kid = (np.sum(K_real) / (m * m)) + (np.sum(K_gen) / (n * n)) - (2 * np.sum(K_real_gen) / (m * n))
-    return kid
+
+    # Compute KID score
+    m = K_real.shape[0]  # Number of samples
+    KID = (np.sum(K_real) + np.sum(K_gen) - 2 * np.sum(K_real @ K_gen.T)) / (m * m)
+    return KID
 
 # Function to compute the Inception Score
 def compute_is(generated_features):
@@ -210,6 +270,8 @@ def tsed_evaluate(generated_dir, poses, intrinsics):
     for i in range(len(generated_files) - 1):
         gen_image1 = cv2.imread(os.path.join(generated_dir, generated_files[0]))
         gen_image2 = cv2.imread(os.path.join(generated_dir, generated_files[i + 1]))
+        print(i)
+        print(len(poses))
         pose1 = poses[i]
         pose2 = poses[i + 1]
         # gt_image1 = cv2.imread(os.path.join(ground_truth_dir, ground_truth_files[i]))
@@ -233,7 +295,8 @@ def tsed_evaluate(generated_dir, poses, intrinsics):
 def evaluate(generated_dir, ground_truth_dir):
     generated_files = sorted(os.listdir(generated_dir))
     ground_truth_files = sorted(os.listdir(ground_truth_dir))
-    
+    ground_truth_files.pop(0)  # Remove the first file from the list
+
     fid_scores = []
     is_scores = []
     lpips_scores = []
@@ -249,7 +312,13 @@ def evaluate(generated_dir, ground_truth_dir):
     real_features = []
     generated_features = []
     all_kid_values = []
+    fid_scores = []
+    # Calculate the half-point
+    half_point = len(generated_files) // 2
 
+    # Slice the lists to only include the first half
+    generated_files = generated_files[half_point:]
+    ground_truth_files = ground_truth_files[half_point:]
     for gen_file, gt_file in tqdm(zip(generated_files, ground_truth_files), total=len(generated_files)):
         gen_image = load_image(os.path.join(generated_dir, gen_file))
         gt_image = load_image(os.path.join(ground_truth_dir, gt_file))
@@ -271,16 +340,21 @@ def evaluate(generated_dir, ground_truth_dir):
         print("#######$$$$$$$$$$$$$$#########")
         print(real_feature)
         print(gen_feature)
+        
+        real_feature = extract_features(os.path.join(generated_dir, gen_file))
+        generated_feature = extract_features(os.path.join(ground_truth_dir, gt_file))
+        
+        fid = compute_fid(real_feature.reshape(1, -1), generated_feature.reshape(1, -1))
         # fid_score = compute_fid(real_features, generated_features)
-        kid_value = compute_kid(real_feature, gen_feature)
+        # kid_value = compute_kid(real_feature, gen_feature)
         ###########
         # Compute TSED if necessary
         # tsed_score = compute_tsed(gen_image.numpy(), gt_image.numpy())
-        
+        fid_scores.append(fid)        
         lpips_scores.append(lpips_score)
         psnr_scores.append(psnr_score)
         ssim_scores.append(ssim_score)
-        all_kid_values.append(kid_value)
+        # all_kid_values.append(kid_value)
         # fid_scores.append(fid_score)
         # tsed_scores.append(tsed_score)
 
@@ -291,25 +365,44 @@ def evaluate(generated_dir, ground_truth_dir):
     real_features = np.vstack(real_features)
     generated_features = np.vstack(generated_features)
 
-    fid_score = compute_fid(generated_features, real_features)
+    # fid_score = compute_fid(generated_features, real_features)
     # is_score = compute_is(generated_features)
     
     # print(f'Inception Score (IS): {is_score}')
     print(f'LPIPS: {np.mean(lpips_scores)}')
     print(f'PSNR: {np.mean(psnr_scores)}')
     print(f'SSIM: {np.mean(ssim_scores)}')
-    print(f'FID Score: {fid_score}')
-    print(f"Average KID: {np.mean(all_kid_values)}")
+    print(f'FID Score: {np.mean(fid_scores)}')
+    return np.mean(fid_scores), np.mean(lpips_scores), np.mean(psnr_scores), np.mean(ssim_scores), np.mean(fid_scores)
+    # print(f"Average KID: {np.mean(all_kid_values)}")
     # print(f'TSED: {np.mean(tsed_scores)}')
 
 if __name__ == "__main__":
     base_dir = '/home/student.unimelb.edu.au/xueyangk'
-    folder_type = 'fast-DiT/data/real-estate/rgb'
-    gt_folder_type = 'fast-DiT/data/real-estate/rgb'
+    folder_type = 'fast-DiT/data/lookout_realestate/lookout_realestate'
+    gt_folder_type = 'fast-DiT/data/realestate32/realestate32'
+    folder_type = 'fast-DiT/data/ablation_3/5'
+    gt_folder_type = 'fast-DiT/data/realestate/1/rgb'
+    folder_id = '0b55abc1ca2fe909'
+    fid_all_means = 0.0
+    all_lpips_scores = 0.0
+    all_psnr_scores = 0.0  
+    all_ssim_scores = 0.0 
+    all_fid_scores = 0.0
+    counter = 0.0
     # filename = 'frame_000440.jpg'
-    generated_dir = os.path.join(base_dir, folder_type)
-    ground_truth_dir = os.path.join(base_dir, gt_folder_type)
-    ###########Json file for pose and intrinsics############
+    ##############subset iteration for metric evaluation #########################################################################
+    # folders = [name for name in os.listdir(os.path.join(base_dir, folder_type)) if os.path.isdir(os.path.join(base_dir, folder_type))]
+    # for folder_id in folders:
+    #     generated_dir = os.path.join(base_dir, folder_type, folder_id)
+    #     gt_folder_ids = [name for name in os.listdir(os.path.join(base_dir, gt_folder_type)) if os.path.isdir(os.path.join(base_dir, gt_folder_type))]
+    #     if folder_id in gt_folder_ids:
+    #         ground_truth_dir = os.path.join(base_dir, gt_folder_type, folder_id)
+    #         counter = counter + 1
+    #     else:
+    #         continue
+        ###########Json file for pose and intrinsics############
+    
     json_file = 'fast-DiT/data/real-estate/output.json'
     with open(os.path.join(base_dir, json_file), 'r') as file:
         data = json.load(file)
@@ -317,14 +410,21 @@ if __name__ == "__main__":
     # Create a dictionary for quick lookup
     data_dict = {entry['timestamp']: entry for entry in data}
     # Iterate through the data to find the specific timestamp
-    generated_img_files = sorted(os.listdir(generated_dir))
+    # generated_img_files = sorted(os.listdir(generated_dir))
+    filenames = []
+    for filename in os.listdir(os.path.join(base_dir, folder_type)):
+        if filename.endswith('.png'):
+            filenames.append(filename)
+    filenames_sorted = sorted(filenames, key=lambda x: int(os.path.splitext(x)[0]))
+
+    # generated_img_files = sorted(os.path.join(base_dir, folder_type), key=lambda x: int(os.path.splitext(x)[0]))
     # Initialize variables for pose and intrinsics
-    n = len(generated_img_files)
+    # n = len(generated_img_files)
     poses = [] #np.zeros((n, 4, 4))
     intrinsics = [] #np.zeros((n, 3, 3))
     W = 640    ##real estatte dataset size
     H = 360    ##real estatte dataset size
-    for image_file in generated_img_files:     ###########generated imaGE IN 256
+    for image_file in filenames_sorted:     ###########generated imaGE IN 256
         # Extract timestamp from filename
         filename = os.path.basename(image_file)
         file_timestamp = int(os.path.splitext(filename)[0])  # Assuming filename is just the timestamp
@@ -357,19 +457,33 @@ if __name__ == "__main__":
 
             intrinsics.append(intrinsic)
 
-    ############scale and crop the gt folder from the original size to 256, same size of our generated image size############
-    gt_img_files = sorted(os.listdir(ground_truth_dir))
-    output_folder_type = "fast-DiT/data/real-estate/rgb"
-    for gt_image in gt_img_files:     ###########GT IN 256
-        print("######gt image########")
-        print(gt_image)
-        gt_img = cv2.imread(os.path.join(base_dir, gt_folder_type, gt_image))
-        gt_cropped_img = center_crop_img_and_resize(gt_img, 256)
-        filename = os.path.basename(image_file)
-        print(filename)
-        ### file_timestamp = int(os.path.splitext(filename)[0])
-        cv2.imwrite(os.path.join(base_dir, output_folder_type, filename), gt_cropped_img)
-    cropped_ground_truth_dir = os.path.join(base_dir, output_folder_type)
+        ############scale and crop the gt folder from the original size to 256, same size of our generated image size############
+        # gt_img_files = sorted(os.listdir(ground_truth_dir))
+    # output_folder_type = "fast-DiT/data/real-estate/rgb"
+    # for gt_image in gt_img_files:     ###########GT IN 256
+    #     print("######gt image########")
+    #     print(gt_image)
+    #     gt_img = cv2.imread(os.path.join(base_dir, gt_folder_type, gt_image))
+    #     gt_cropped_img = center_crop_img_and_resize(gt_img, 256)
+    #     filename = os.path.basename(image_file)
+    #     print(filename)
+    #     ### file_timestamp = int(os.path.splitext(filename)[0])
+    #     cv2.imwrite(os.path.join(base_dir, output_folder_type, filename), gt_cropped_img)
+    # cropped_ground_truth_dir = os.path.join(base_dir, output_folder_type)
 
-    evaluate(generated_dir, cropped_ground_truth_dir)      ######First 5 metric results on poxels of generated vs GT images########
-    tsed_evaluate(generated_dir, poses, intrinsics)     ##### Pixel consistency
+    # fid_means, lpips_scores, psnr_scores, ssim_scores, fid_scores = evaluate(generated_dir, ground_truth_dir)   ######First 5 metric results on poxels of generated vs GT images########
+    tsed_evaluate(os.path.join(base_dir, folder_type), poses, intrinsics)     ##### Pixel consistency
+    # fid_all_means = fid_all_means + fid_means
+    # all_lpips_scores = all_lpips_scores + lpips_scores
+    # all_psnr_scores = all_psnr_scores + psnr_scores
+    # all_ssim_scores = all_ssim_scores + ssim_scores
+    # all_fid_scores = all_fid_scores + fid_scores
+
+
+    ###############subset metric#############
+    # print("all subset 32-subset average scores")
+    # print(fid_all_means/counter)
+    # print(all_lpips_scores/counter)
+    # print(all_psnr_scores/counter)
+    # print(all_ssim_scores/counter)
+    # print(all_fid_scores/counter)

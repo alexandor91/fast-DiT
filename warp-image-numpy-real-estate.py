@@ -287,8 +287,9 @@ if __name__ == "__main__":
             filenames.append(filename)
     
     # Sort filenames (assuming they are timestamps)
-    filenames.sort()
+    filenames_sorted = sorted(filenames, key=lambda x: int(os.path.splitext(x)[0]))
     print(filenames)
+
 
     src_intrinsic = None
     tar_intrinsic = None
@@ -333,7 +334,8 @@ if __name__ == "__main__":
     
     print("#####1 $$$$$$$##########")
     print(src_homo_mat_sample)
-    for filename in filenames:          
+    filenames_sorted.pop(0)  # Remove the first file from the list
+    for filename in filenames_sorted:       
         if filename.endswith('.png'):
             frame_id = filename.split('.')[0]
         if int(frame_id) == int(src_frame_id):
@@ -366,7 +368,7 @@ if __name__ == "__main__":
 
         # depth_file = '86352933_depth.npy'
         # folder_type = 'fast-DiT/data/real-estate/depth'
-        # depth_map = cv2.imread(os.path.join(base_dir, folder_type, depth_file), cv2.IMREAD_UNCHANGED)   
+        depth_map = cv2.imread(os.path.join(base_dir, folder_type), cv2.IMREAD_UNCHANGED)   
         file_type = 'depth'
         print("########$$$$$$$$$$$$$##########")
         print(os.path.join(base_dir, folder_type, file_type, str(frame_id) + '.npy'))
